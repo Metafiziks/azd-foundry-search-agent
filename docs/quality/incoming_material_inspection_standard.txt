@@ -1,0 +1,29 @@
+Document Title: Incoming Material Inspection Standard
+Document Type: Quality Control Standard
+Department: Quality Assurance
+Applies To: Receiving, warehouse, production supervisors, quality inspectors
+Revision: 2026.03
+
+Purpose:
+This standard defines the inspection process for raw materials, components, and packaging received from suppliers.
+
+Inspection Requirements:
+Incoming materials must be inspected before release to production. Inspection includes verification of supplier name, purchase order, lot number, certificate of analysis when required, quantity, packaging condition, and visible damage.
+
+Sampling:
+Quality inspectors must follow the approved sampling plan for each material category. Critical components require increased sampling frequency. Materials with prior supplier issues may require tightened inspection.
+
+Acceptance Criteria:
+Materials may be accepted if they match purchase specifications, show no contamination, include required documentation, and meet dimensional or visual requirements.
+
+Rejection Criteria:
+Materials must be rejected or quarantined if they are damaged, mislabeled, contaminated, missing required documentation, outside tolerance, or from an unapproved supplier.
+
+Quarantine Process:
+Rejected materials must be moved to the designated quarantine area and labeled with a hold tag. The material must not be used in production until Quality Assurance releases it.
+
+Supervisor Responsibilities:
+Floor supervisors must not use uninspected or quarantined materials to keep production running. If production is at risk, supervisors must escalate to Quality Assurance and Planning.
+
+Related Terms:
+incoming inspection, supplier quality, quarantine, certificate of analysis, lot number, sampling plan, material release.
