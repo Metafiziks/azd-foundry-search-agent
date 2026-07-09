@@ -1,0 +1,32 @@
+Document Title: Conveyor Preventive Maintenance Manual
+Document Type: Maintenance Manual
+Department: Maintenance
+Applies To: Line 1, Line 2, Line 3 conveyors
+Revision: 2026.02
+
+Purpose:
+This manual defines inspection and preventive maintenance requirements for belt conveyors used in production and packaging areas.
+
+Daily Inspection:
+Operators must inspect conveyors before startup for unusual noise, belt damage, loose fasteners, foreign objects, and visible guarding issues. Any abnormal condition must be reported to maintenance.
+
+Weekly Maintenance:
+Maintenance technicians must inspect belt tracking, roller rotation, drive chain tension, motor mount bolts, emergency stop function, and photo eye alignment.
+
+Monthly Maintenance:
+Monthly preventive maintenance includes lubrication of approved bearings, inspection of gearbox oil level, review of belt wear, verification of guard condition, and inspection of electrical conduit damage.
+
+Belt Tracking Adjustment:
+If the belt drifts to one side, inspect for debris buildup, worn rollers, uneven tension, or damaged tracking guides. Adjust tracking slowly in small increments while observing the belt under normal load.
+
+Emergency Stops:
+Emergency stop pull cords and buttons must be tested weekly. If any emergency stop device fails, the conveyor must be removed from service until repaired.
+
+Common Issues:
+- Belt slipping: check tension, pulley wear, and product overload.
+- Motor overheating: inspect airflow, load, gearbox condition, and electrical connections.
+- Repeated jams: inspect transfer points, product spacing, and side guide alignment.
+- Loud squealing: inspect bearings, belt friction points, and roller seizure.
+
+Related Terms:
+conveyor maintenance, preventive maintenance, belt tracking, roller inspection, emergency stop, line jam.
