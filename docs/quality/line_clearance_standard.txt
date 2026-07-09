@@ -1,0 +1,37 @@
+Document Title: Production Line Clearance Standard
+Document Type: Quality Control Standard
+Department: Quality Assurance
+Applies To: Floor supervisors, line leads, operators, quality inspectors
+Revision: 2026.03
+
+Purpose:
+Line clearance prevents mix-ups between products, lots, labels, packaging, and work orders during changeover.
+
+When Line Clearance Is Required:
+Line clearance is required before starting a new product, lot, work order, packaging configuration, label set, or customer-specific build.
+
+Required Checks:
+1. Remove all previous product from the line.
+2. Remove previous labels, cartons, inserts, and packaging materials.
+3. Verify the new work order number.
+4. Verify correct product code and revision.
+5. Verify correct lot number.
+6. Verify correct labels and packaging materials.
+7. Confirm tools and fixtures match the new build.
+8. Document supervisor and quality approval.
+
+Common Line Clearance Failures:
+- Old labels left at the workstation
+- Previous lot paperwork mixed with new work order
+- Incorrect carton type staged at the line
+- Product from prior run left in bins
+- Unapproved fixture used after changeover
+
+Supervisor Responsibilities:
+The floor supervisor must complete the line clearance checklist before allowing production to restart. Quality Assurance approval is required for regulated or customer-critical products.
+
+If an Error Is Found:
+Stop the line, segregate affected product, notify Quality Assurance, and document the issue before restarting.
+
+Related Terms:
+line clearance, changeover, work order, lot control, label verification, product mix-up, packaging control.
