@@ -1,0 +1,32 @@
+Document Title: Finished Goods Defect Classification Standard
+Document Type: Quality Control Standard
+Department: Quality Assurance
+Applies To: Production operators, floor supervisors, quality inspectors
+Revision: 2026.03
+
+Purpose:
+This standard defines how finished goods defects are classified and handled before shipment.
+
+Defect Classes:
+Critical Defect:
+A defect that could create a safety risk, regulatory issue, or product failure. Critical defects require immediate hold and Quality Assurance escalation.
+
+Major Defect:
+A defect that affects product function, fit, performance, customer usability, or appearance beyond approved limits. Major defects require supervisor review and possible rework or rejection.
+
+Minor Defect:
+A defect that does not affect function or customer use and remains within approved cosmetic limits. Minor defects may be accepted if documented.
+
+Examples:
+Critical defects include exposed sharp edges, missing safety labels, contamination, incorrect product configuration, or failed functional test.
+Major defects include cracked housing, incorrect dimensions, incomplete assembly, missing non-safety label, or failed packaging seal.
+Minor defects include small cosmetic scuffs, slight color variation within tolerance, or minor packaging blemish.
+
+Containment:
+If repeated defects are found, the supervisor must stop shipment of the affected lot, notify Quality Assurance, identify the last known good unit, and begin containment.
+
+Rework:
+Rework must follow approved work instructions. Reworked product must be reinspected before release.
+
+Related Terms:
+finished goods, defect classification, critical defect, major defect, minor defect, containment, rework, lot hold.
