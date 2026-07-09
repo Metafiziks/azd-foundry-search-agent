@@ -1,0 +1,32 @@
+Document Title: Hydraulic Press Troubleshooting Guide
+Document Type: Maintenance Manual
+Department: Maintenance
+Applies To: Hydraulic press units HP-100 through HP-140
+Revision: 2026.02
+
+Purpose:
+This guide helps maintenance technicians and floor supervisors diagnose common hydraulic press problems.
+
+Low Pressure Condition:
+If the press cannot reach target pressure, inspect hydraulic fluid level, pump condition, pressure relief valve setting, leaks, clogged filters, and worn seals.
+
+Slow Cycle Time:
+Slow press movement may be caused by low fluid temperature, restricted filters, worn pump components, incorrect valve position, air in the hydraulic system, or low supply pressure.
+
+Oil Leak Response:
+If oil is found under or around the press, stop the machine and notify maintenance. Do not operate the press with active hydraulic leaks. Use absorbent pads and follow spill response procedures.
+
+Overheating:
+Hydraulic oil temperature above the acceptable range may indicate restricted cooling, dirty heat exchanger, excessive load, low oil level, or continuous operation beyond duty cycle.
+
+Abnormal Noise:
+Grinding, knocking, or cavitation sounds may indicate pump wear, air in the system, blocked suction line, or low reservoir level.
+
+Restart After Maintenance:
+Before returning the press to production, maintenance must verify guard placement, pressure settings, leak-free operation, emergency stop function, and successful dry cycle testing.
+
+Supervisor Guidance:
+Floor supervisors may request maintenance support, but they may not authorize bypassing pressure limits, guards, interlocks, or safety devices.
+
+Related Terms:
+hydraulic press, low pressure, cycle time, hydraulic leak, overheating, pump noise, pressure relief valve.
