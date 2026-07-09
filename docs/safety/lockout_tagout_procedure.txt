@@ -1,0 +1,33 @@
+Document Title: Lockout Tagout Procedure
+Document Type: Safety Procedure
+Department: Plant Safety
+Applies To: Floor supervisors, maintenance technicians, line operators
+Revision: 2026.01
+
+Purpose:
+This procedure defines how employees must isolate hazardous energy before performing maintenance, cleaning, adjustment, or repair work on production equipment.
+
+When Lockout Tagout Is Required:
+Lockout tagout is required before any employee removes a guard, reaches into a machine, services powered equipment, clears a jam, replaces mechanical components, or performs maintenance where unexpected startup could cause injury.
+
+Required Steps:
+1. Notify affected employees that the equipment will be shut down.
+2. Identify all energy sources, including electrical, pneumatic, hydraulic, thermal, and stored mechanical energy.
+3. Shut down the equipment using the normal stop procedure.
+4. Isolate the equipment from all energy sources.
+5. Apply an approved lock and tag to each energy isolation point.
+6. Release or restrain stored energy.
+7. Verify zero energy by attempting to start the equipment using the normal controls.
+8. Return controls to the off position after verification.
+
+Supervisor Responsibilities:
+Floor supervisors must confirm that lockout tagout is being followed before maintenance work begins. Supervisors may not remove another employee's lock unless the formal lock removal exception process is completed.
+
+Exception Process:
+If an employee who applied a lock is unavailable, the supervisor must contact Plant Safety, verify the employee is not on site, inspect the equipment, and document approval before removing the lock.
+
+Important Safety Rule:
+Never bypass lockout tagout to save production time. Production urgency does not override hazardous energy control requirements.
+
+Related Terms:
+LOTO, lockout, tagout, zero energy verification, hazardous energy, equipment isolation, machine guarding.
