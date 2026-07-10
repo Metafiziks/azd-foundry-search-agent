@@ -73,19 +73,25 @@ else
     fi
   done
   if [ "$SEARCH_CREATED" = "false" ]; then
-    echo "  ERROR: Could not create AI Search service in any region. Try again later." >&2
+    echo "  ERROR: Could not create AI Search service in any region." >&2
     exit 1
   fi
 
-  # Wait for the Search endpoint to become reachable (DNS + service warm-up)
-  echo "  Waiting for Search service to become ready..."
-  for i in $(seq 1 24); do
-    HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
-      "${SEARCH_ENDPOINT}/?api-version=2024-07-01" \
-      -H "api-key: placeholder" 2>/dev/null || true)
-    # 401 or 403 means the endpoint is up (just rejects our placeholder key)
-    # 200 would also be fine
-    if [ "$HTTP" = "401" ] || [ "$HTTP" = "403" ] || [ "$HTTP" = "200" ]; then
+  echo "  Waiting for Search endpoint to become reachable..."
+  for i in $(seq 1 30); do
+    CODE=$(python3 -c "
+import urllib.request, urllib.error
+try:
+    req = urllib.request.Request('${SEARCH_ENDPOINT}/?api-version=2024-07-01')
+    req.add_header('api-key', 'placeholder')
+    urllib.request.urlopen(req, timeout=5)
+    print(200)
+except urllib.error.HTTPError as e:
+    print(e.code)
+except Exception:
+    print(0)
+" 2>/dev/null || echo "0")
+    if [ "$CODE" = "401" ] || [ "$CODE" = "403" ] || [ "$CODE" = "200" ]; then
       echo "  ✓ Search endpoint is ready"
       break
     fi
@@ -152,80 +158,15 @@ if [ -n "$SEARCH_PRINCIPAL" ] && [ "$SEARCH_PRINCIPAL" != "null" ]; then
   echo "  ✓ Search identity granted Storage Blob Data Reader"
 fi
 
-# --- Create Search index ---
+# --- Search REST via Python (avoids macOS curl/TLS issues) ---
 echo ""
-echo "► Creating search index: ${INDEX_NAME}..."
-curl -sf -X PUT "${SEARCH_ENDPOINT}/indexes/${INDEX_NAME}?api-version=2024-07-01" \
-  -H "Content-Type: application/json" \
-  -H "api-key: ${SEARCH_KEY}" \
-  -d "{
-    \"name\": \"${INDEX_NAME}\",
-    \"fields\": [
-      {\"name\": \"id\",                             \"type\": \"Edm.String\",        \"key\": true, \"filterable\": true, \"retrievable\": true},
-      {\"name\": \"content\",                        \"type\": \"Edm.String\",        \"searchable\": true, \"retrievable\": true, \"analyzer\": \"en.microsoft\"},
-      {\"name\": \"metadata_storage_name\",          \"type\": \"Edm.String\",        \"searchable\": true, \"retrievable\": true, \"filterable\": true},
-      {\"name\": \"metadata_storage_path\",          \"type\": \"Edm.String\",        \"retrievable\": true},
-      {\"name\": \"metadata_storage_last_modified\", \"type\": \"Edm.DateTimeOffset\", \"retrievable\": true}
-    ],
-    \"semantic\": {
-      \"configurations\": [{
-        \"name\": \"default\",
-        \"prioritizedFields\": {
-          \"contentFields\": [{\"fieldName\": \"content\"}],
-          \"keywordsFields\": [{\"fieldName\": \"metadata_storage_name\"}]
-        }
-      }]
-    }
-  }" > /dev/null
-echo "  ✓ Index created"
-
-# --- Create data source ---
-echo "► Creating data source..."
-curl -sf -X PUT "${SEARCH_ENDPOINT}/datasources/${INDEX_NAME}-blob?api-version=2024-07-01" \
-  -H "Content-Type: application/json" \
-  -H "api-key: ${SEARCH_KEY}" \
-  -d "{
-    \"name\": \"${INDEX_NAME}-blob\",
-    \"type\": \"azureblob\",
-    \"credentials\": {
-      \"connectionString\": \"DefaultEndpointsProtocol=https;AccountName=${STORAGE_NAME};AccountKey=${STORAGE_KEY};EndpointSuffix=core.windows.net\"
-    },
-    \"container\": {\"name\": \"docs\"}
-  }" > /dev/null
-echo "  ✓ Data source created"
-
-# --- Create and run indexer ---
-echo "► Creating and running indexer..."
-curl -sf -X PUT "${SEARCH_ENDPOINT}/indexers/${INDEX_NAME}-indexer?api-version=2024-07-01" \
-  -H "Content-Type: application/json" \
-  -H "api-key: ${SEARCH_KEY}" \
-  -d "{
-    \"name\": \"${INDEX_NAME}-indexer\",
-    \"dataSourceName\": \"${INDEX_NAME}-blob\",
-    \"targetIndexName\": \"${INDEX_NAME}\",
-    \"schedule\": {\"interval\": \"PT2H\"},
-    \"parameters\": {
-      \"batchSize\": 100,
-      \"configuration\": {\"dataToExtract\": \"contentAndMetadata\", \"parsingMode\": \"text\"}
-    },
-    \"fieldMappings\": [
-      {\"sourceFieldName\": \"metadata_storage_path\", \"targetFieldName\": \"id\", \"mappingFunction\": {\"name\": \"base64Encode\"}}
-    ]
-  }" > /dev/null
-
-curl -sf -X POST "${SEARCH_ENDPOINT}/indexers/${INDEX_NAME}-indexer/run?api-version=2024-07-01" \
-  -H "api-key: ${SEARCH_KEY}" > /dev/null
-
-echo "  Waiting for indexer..."
-for i in $(seq 1 18); do
-  STATUS=$(curl -sf "${SEARCH_ENDPOINT}/indexers/${INDEX_NAME}-indexer/status?api-version=2024-07-01" \
-    -H "api-key: ${SEARCH_KEY}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('lastResult',{}).get('status','running'))" 2>/dev/null || echo "running")
-  if [ "$STATUS" = "success" ] || [ "$STATUS" = "reset" ]; then
-    echo "  ✓ Indexer complete"
-    break
-  fi
-  sleep 5
-done
+echo "► Creating search index, data source, and indexer..."
+python3 /tmp/search_setup.py \
+  "${SEARCH_ENDPOINT}" \
+  "${SEARCH_KEY}" \
+  "${INDEX_NAME}" \
+  "${STORAGE_NAME}" \
+  "${STORAGE_KEY}"
 
 # --- Save env vars ---
 azd env set AZURE_SEARCH_ENDPOINT "$SEARCH_ENDPOINT"
