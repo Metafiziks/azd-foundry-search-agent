@@ -202,23 +202,25 @@ azd env set AZURE_SEARCH_RESOURCE_ID "$SEARCH_RESOURCE_ID"
 
 echo ""
 # --- Wait for Foundry project API to be ready for agent deployment ---
-# The AI project is created during provisioning, but the Foundry agents API can take
-# 1-2 minutes to become reachable. Poll until it responds before deploy can proceed.
+# The AI project ARM resource is created during provisioning, but the Foundry agents API
+# (*.services.ai.azure.com) takes additional time to initialize internally.
+# Without this wait, azd deploy fails with "Project not found" (404).
+# Note: az rest needs --resource to get a Cognitive Services token (not the default ARM token).
 echo ""
 echo "► Waiting for Foundry project API to be ready for deployment..."
 PROJECT_API="https://${ACCOUNT}.services.ai.azure.com/api/projects/${AZURE_ENV_NAME}/agents?api-version=v1"
 READY=false
-for i in $(seq 1 18); do
-  if az rest --method GET --url "$PROJECT_API" --output none 2>/dev/null; then
+for i in $(seq 1 36); do
+  if az rest --method GET --url "$PROJECT_API"       --resource "https://cognitiveservices.azure.com"       --output none 2>/dev/null; then
     echo "  ✓ Foundry project API is ready"
     READY=true
     break
   fi
-  echo "  Waiting for project API... (${i}/18)"
+  echo "  Waiting for project API... (${i}/36, ~$((i * 10))s elapsed)"
   sleep 10
 done
 if [ "$READY" != "true" ]; then
-  echo "  ⚠  Project API not ready after 3 minutes — if deploy fails, run: azd deploy"
+  echo "  ⚠  Project API not ready after 6 minutes — if deploy fails with 'Project not found', run: azd deploy"
 fi
 
 echo ""
