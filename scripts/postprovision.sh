@@ -305,7 +305,7 @@ arm_base = f"https://management.azure.com/subscriptions/{sub_id}/resourceGroups/
 # Account-level capability host (required first)
 ensure_cap_host(
     f"{arm_base}/capabilityHosts/agents?api-version={cap_api}",
-    {"properties": {"capabilityHostKind": "Agents", "enablePublicHostingEnvironment": True}},
+    {"properties": {"capabilityHostKind": "Agents"}},
     "Account capability host"
 )
 # Project-level capability host
