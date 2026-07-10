@@ -254,7 +254,7 @@ except Exception as e:
     print(f"  POST attempt: {type(e).__name__} — will poll for readiness", flush=True)
 
 # Poll until agents endpoint returns 200
-for i in range(72):  # up to 12 minutes
+for i in range(180):  # up to 30 minutes
     token = get_token()
     code, err = try_get(agents_url, token)
     if code == 200:
@@ -264,8 +264,9 @@ for i in range(72):  # up to 12 minutes
     print(f"  Waiting... ({i+1}/72, ~{(i+1)*10}s, {label})", flush=True)
     time.sleep(10)
 
-print("  \u26a0  Project data plane not ready after 12 min.")
-print("     If 'azd deploy' fails, open ai.azure.com, click the project, then re-run 'azd deploy'")
+print("  \u26a0  Foundry data plane not synced after 30 min.")
+print("     Run 'azd deploy' again in 30-60 min. This is an Azure platform delay, not a template bug.")
+print("     Tip: visiting ai.azure.com and clicking your project may accelerate initialization.")
 WAIT_EOF
 echo ""
 echo "=== Post-Provision Complete ==="
