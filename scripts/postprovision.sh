@@ -201,7 +201,44 @@ azd env set AZURE_SEARCH_INDEX "$INDEX_NAME"
 azd env set AZURE_SEARCH_RESOURCE_ID "$SEARCH_RESOURCE_ID"
 
 echo ""
-echo "=== Post-Provision Complete ==="
+echo "'# --- Wait for Foundry project API to be ready for agent deployment ---
+# The AI project is created during provisioning, but the Foundry agents API can take
+# 1-2 minutes to become reachable. Poll until it responds before allowing deploy to proceed.
+echo ""
+echo "► Waiting for Foundry project API to be ready for deployment..."
+PROJECT_API="https://.services.ai.azure.com/api/projects//agents?api-version=v1"
+READY=false
+for i in 1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18; do
+  if az rest --method GET --url "" --output none 2>/dev/null; then
+    echo "  ✓ Foundry project API is ready"
+    READY=true
+    break
+  fi
+  echo "  Waiting for project API... (/18)"
+  sleep 10
+done
+if [ "" != "true" ]; then
+  echo "  ⚠  Project API not ready after 3 minutes — if deploy fails, run: azd deploy"
+fi
+
+=== Post-Provision Complete ==='"
 echo "  Search : ${SEARCH_ENDPOINT}"
 echo "  Index  : ${INDEX_NAME}"
 echo ""
