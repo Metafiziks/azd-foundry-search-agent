@@ -215,7 +215,7 @@ PROJECT_API="https://${ACCOUNT}.services.ai.azure.com/api/projects/${AZURE_ENV_N
 READY=false
 for i in $(seq 1 18); do
   if az rest --method GET --url "$PROJECT_API" --output none 2>/dev/null; then
-    echo "  \u2713 Foundry project API is ready"
+    echo "  ✓ Foundry project API is ready"
     READY=true
     break
   fi
@@ -223,7 +223,7 @@ for i in $(seq 1 18); do
   sleep 10
 done
 if [ "$READY" != "true" ]; then
-  echo "  \u26a0  Project API not ready after 3 minutes — if deploy fails, run: azd deploy"
+  echo "  ⚠  Project API not ready after 3 minutes — if deploy fails, run: azd deploy"
 fi
 
 echo ""
