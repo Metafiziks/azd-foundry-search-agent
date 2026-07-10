@@ -213,7 +213,7 @@ import subprocess, sys, time, urllib.request, urllib.error, json as _json
 def get_token():
     r = subprocess.run(
         ["az", "account", "get-access-token",
-         "--resource", "https://cognitiveservices.azure.com",
+         "--resource", "https://ai.azure.com",
          "--query", "accessToken", "-o", "tsv"],
         capture_output=True, text=True
     )
