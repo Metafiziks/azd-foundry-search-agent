@@ -205,23 +205,40 @@ echo ""
 # The AI project ARM resource is created during provisioning, but the Foundry agents API
 # (*.services.ai.azure.com) takes additional time to initialize internally.
 # Without this wait, azd deploy fails with "Project not found" (404).
-# Note: az rest needs --resource to get a Cognitive Services token (not the default ARM token).
 echo ""
 echo "► Waiting for Foundry project API to be ready for deployment..."
-PROJECT_API="https://${ACCOUNT}.services.ai.azure.com/api/projects/${AZURE_ENV_NAME}/agents?api-version=v1"
-READY=false
-for i in $(seq 1 36); do
-  if az rest --method GET --url "$PROJECT_API"       --resource "https://cognitiveservices.azure.com"       --output none 2>/dev/null; then
-    echo "  ✓ Foundry project API is ready"
-    READY=true
-    break
-  fi
-  echo "  Waiting for project API... (${i}/36, ~$((i * 10))s elapsed)"
-  sleep 10
-done
-if [ "$READY" != "true" ]; then
-  echo "  ⚠  Project API not ready after 6 minutes — if deploy fails with 'Project not found', run: azd deploy"
-fi
+python3 - "${ACCOUNT}" "${AZURE_ENV_NAME}" << 'WAIT_EOF'
+import subprocess, sys, time, urllib.request, urllib.error
+
+def get_token(scope):
+    r = subprocess.run(
+        ["az", "account", "get-access-token", "--resource", scope,
+         "--query", "accessToken", "-o", "tsv"],
+        capture_output=True, text=True
+    )
+    return r.stdout.strip()
+
+account, project = sys.argv[1], sys.argv[2]
+url = f"https://{account}.services.ai.azure.com/api/projects/{project}/agents?api-version=v1"
+
+for i in range(36):
+    last_code = "unknown"
+    for scope in ["https://cognitiveservices.azure.com", "https://management.azure.com"]:
+        try:
+            token = get_token(scope)
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                print(f"  \u2713 Foundry project API is ready (HTTP {resp.status})", flush=True)
+                sys.exit(0)
+        except urllib.error.HTTPError as e:
+            last_code = f"HTTP {e.code}"
+        except Exception as e:
+            last_code = type(e).__name__
+    print(f"  Waiting for project API... ({i+1}/36, ~{(i+1)*10}s elapsed, {last_code})", flush=True)
+    time.sleep(10)
+
+print("  \u26a0  Project API not ready after 6 minutes — if deploy fails, run: azd deploy")
+WAIT_EOF
 
 echo ""
 echo "=== Post-Provision Complete ==="
