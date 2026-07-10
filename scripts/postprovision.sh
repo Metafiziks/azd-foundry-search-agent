@@ -201,13 +201,12 @@ azd env set AZURE_SEARCH_INDEX "$INDEX_NAME"
 azd env set AZURE_SEARCH_RESOURCE_ID "$SEARCH_RESOURCE_ID"
 
 echo ""
-# --- Initialize and wait for Foundry project data plane ---
-# The ARM resource is created by azd provision, but the Foundry data plane
-# initializes lazily. We explicitly trigger initialization via API calls and
-# poll until the project is ready to accept agent deployments.
+# --- Register Foundry project with data plane and wait for readiness ---
+# The ARM resource is created by provision, but the Foundry data plane uses lazy
+# initialization. We explicitly POST to register the project, then poll until ready.
 echo ""
-echo "► Initializing Foundry project data plane..."
-python3 - "${ACCOUNT}" "${AZURE_ENV_NAME}" << 'WAIT_EOF'
+echo "► Registering Foundry project with data plane..."
+python3 - "${ACCOUNT}" "${AZURE_ENV_NAME}" "${AZURE_SUBSCRIPTION_ID}" "${AZURE_RESOURCE_GROUP}" << 'WAIT_EOF'
 import subprocess, sys, time, urllib.request, urllib.error, json as _json
 
 def get_token():
@@ -219,49 +218,53 @@ def get_token():
     )
     return r.stdout.strip()
 
-account, project = sys.argv[1], sys.argv[2]
+account, project, sub_id, rg = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 base = f"https://{account}.services.ai.azure.com"
+projects_url = f"{base}/api/projects?api-version=2025-05-01"
 agents_url = f"{base}/api/projects/{project}/agents?api-version=v1"
-project_url = f"{base}/api/projects/{project}?api-version=v1"
-projects_url = f"{base}/api/projects?api-version=v1"
+arm_resource_id = (
+    f"/subscriptions/{sub_id}/resourceGroups/{rg}"
+    f"/providers/Microsoft.CognitiveServices/accounts/{account}/projects/{project}"
+)
 
-def try_get(url, token):
-    try:
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return resp.status, None
-    except urllib.error.HTTPError as e:
-        return e.code, None
-    except Exception as e:
-        return None, type(e).__name__
-
-# Attempt 1: POST to projects list to trigger data plane registration
+# Step 1: POST to register the project in the data plane
 token = get_token()
+body = _json.dumps({
+    "displayName": project,
+    "description": f"{project} Project",
+    "armResourceId": arm_resource_id
+}).encode()
 try:
-    body = _json.dumps({"name": project}).encode()
     req = urllib.request.Request(
         projects_url, data=body, method="POST",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        print(f"  Project registered via POST (HTTP {resp.status})", flush=True)
+        print(f"  \u2713 Project registered via POST (HTTP {resp.status})", flush=True)
 except urllib.error.HTTPError as e:
     if e.code == 409:
-        print(f"  Project already registered (HTTP 409)", flush=True)
+        print(f"  \u2713 Project already registered (HTTP 409 Conflict)", flush=True)
     else:
-        print(f"  POST returned HTTP {e.code} — will poll for readiness", flush=True)
+        body_text = e.read().decode()[:200]
+        print(f"  POST HTTP {e.code}: {body_text} — will poll for readiness", flush=True)
 except Exception as e:
-    print(f"  POST attempt: {type(e).__name__} — will poll for readiness", flush=True)
+    print(f"  POST error: {type(e).__name__} — will poll for readiness", flush=True)
 
-# Poll until agents endpoint returns 200
+# Step 2: Poll agents endpoint until 200
 for i in range(180):  # up to 30 minutes
-    token = get_token()
-    code, err = try_get(agents_url, token)
-    if code == 200:
-        print(f"  \u2713 Foundry project ready (HTTP 200)", flush=True)
-        sys.exit(0)
-    label = f"HTTP {code}" if code else err
-    print(f"  Waiting... ({i+1}/72, ~{(i+1)*10}s, {label})", flush=True)
+    try:
+        token = get_token()
+        req = urllib.request.Request(
+            agents_url, headers={"Authorization": f"Bearer {token}"}
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            print(f"  \u2713 Foundry project ready (HTTP {resp.status})", flush=True)
+            sys.exit(0)
+    except urllib.error.HTTPError as e:
+        label = f"HTTP {e.code}"
+    except Exception as e:
+        label = type(e).__name__
+    print(f"  Waiting for Foundry data plane sync... ({i+1}/180, ~{(i+1)*10}s elapsed, {label})", flush=True)
     time.sleep(10)
 
 print("  \u26a0  Foundry data plane not synced after 30 min.")
