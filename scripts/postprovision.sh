@@ -45,7 +45,17 @@ SEARCH_KEY=$(az search admin-key show --service-name "$SEARCH_NAME" --resource-g
 # --- Storage account ---
 echo ""
 echo "► Creating Storage account: ${STORAGE_NAME}..."
-az storage account create   --name "$STORAGE_NAME"   --resource-group "$RG"   --location "$LOCATION"   --sku Standard_LRS   --kind StorageV2   --allow-blob-public-access false   --output none 2>/dev/null || echo "  (already exists)"
+if az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --output none 2>/dev/null; then
+  echo "  (already exists)"
+else
+  az storage account create \
+    --name "$STORAGE_NAME" \
+    --resource-group "$RG" \
+    --location "$LOCATION" \
+    --sku Standard_LRS --kind StorageV2 \
+    --allow-blob-public-access false \
+    --output none
+fi
 
 STORAGE_RESOURCE_ID=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
 STORAGE_KEY=$(az storage account keys list --account-name "$STORAGE_NAME" --resource-group "$RG" --query "[0].value" -o tsv)
