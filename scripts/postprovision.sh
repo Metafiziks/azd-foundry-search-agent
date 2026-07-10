@@ -45,7 +45,8 @@ SEARCH_KEY=$(az search admin-key show --service-name "$SEARCH_NAME" --resource-g
 # --- Storage account ---
 echo ""
 echo "► Creating Storage account: ${STORAGE_NAME}..."
-if az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --output none 2>/dev/null; then
+EXISTING_STORAGE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query name -o tsv 2>/dev/null || true)
+if [ "$EXISTING_STORAGE" = "$STORAGE_NAME" ]; then
   echo "  (already exists)"
 else
   az storage account create \
