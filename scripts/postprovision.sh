@@ -126,7 +126,7 @@ else
     --location "$LOCATION" \
     --sku Standard_LRS \
     --kind StorageV2 \
-    --allow-blob-public-access false \
+    --allow-blob-public-access true \
     --output none
 fi
 
@@ -137,6 +137,7 @@ az storage container create \
   --name docs \
   --account-name "$STORAGE_NAME" \
   --account-key "$STORAGE_KEY" \
+  --public-access blob \
   --output none 2>/dev/null || true
 echo "  ✓ Storage ready"
 

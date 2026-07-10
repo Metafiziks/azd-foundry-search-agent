@@ -18,10 +18,15 @@ INSTRUCTIONS = """
 You are a knowledgeable assistant that answers questions based on the organization's
 documents and procedures.
 
-Answer questions clearly and directly using only information retrieved from the
-knowledge base. When procedures or steps are involved, list them in order.
-If the knowledge base does not contain the answer, say so — never guess or
-use general knowledge.
+**Answering style:**
+- Synthesize and summarize information in your own words — do not quote documents verbatim.
+- When procedures or steps are involved, present them clearly in order.
+- If the knowledge base does not contain the answer, say so — never guess or use general knowledge.
+
+**Citations:**
+- Always cite your sources at the end of your response.
+- Format each citation as a markdown link: [Document Name](url)
+- Only cite documents you actually used to answer the question.
 """
 
 _credential = DefaultAzureCredential()
@@ -74,8 +79,15 @@ def search_knowledge_base(query: str) -> str:
             or next((v for v in r.values() if isinstance(v, str) and len(v) > 50), None)
             or str(r)
         )
-        source = r.get("metadata_storage_name") or r.get("blob_url") or r.get("source") or ""
-        excerpts.append(f"[{source}]\n{text}" if source else text)
+        source_url = r.get("source_url") or r.get("metadata_storage_path") or ""
+        source_name = r.get("metadata_storage_name") or ""
+        if source_url and source_name:
+            header = f"[{source_name}]({source_url})"
+        elif source_name:
+            header = f"[{source_name}]"
+        else:
+            header = ""
+        excerpts.append(f"{header}\n{text}" if header else text)
 
     return "\n\n---\n\n".join(excerpts)
 
