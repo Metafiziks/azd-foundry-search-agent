@@ -58,6 +58,7 @@ else
       --resource-group "$RG" \
       --location "$REGION" \
       --sku Standard \
+      --auth-options aadOrApiKey \
       --output none 2>/tmp/search_create_err; then
       SEARCH_CREATED=true
       echo "  ✓ Search service created in ${REGION}"
