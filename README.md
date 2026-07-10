@@ -1,6 +1,6 @@
 # azd-foundry-search-agent
 
-> **⚠️ Known limitation:** After `azd provision`, the Azure Foundry agents data plane can take **30–90 minutes** to initialize a newly created project — even though ARM shows "Succeeded". If `azd up` fails with `Project not found` during the deploy step, wait 30+ minutes and run `azd deploy` again. This is an Azure platform behavior, not a template bug.
+> **ℹ️ Deployment note:** `azd up` fully automates provision + deploy in a single step. The post-provision script waits for the Foundry data plane to be ready before deployment starts — no manual retries needed on a fresh environment.
 
 
 An [Azure Developer CLI (azd)](https://aka.ms/azd) template that deploys an **Azure AI Foundry hosted agent** with knowledge-base search over your own document corpus.
