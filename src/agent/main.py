@@ -8,6 +8,7 @@ import os
 from agent_framework import Agent
 from agent_framework.foundry import FoundryChatClient
 from agent_framework_foundry_hosting import ResponsesHostServer
+from azure.core.credentials import AzureKeyCredential
 from azure.identity import DefaultAzureCredential
 from azure.search.documents import SearchClient
 
@@ -28,7 +29,7 @@ _credential = DefaultAzureCredential()
 
 
 def _log_identity() -> None:
-    """Log the managed identity OID so postdeploy.sh can grant it Search RBAC."""
+    """Log the managed identity OID for diagnostics."""
     try:
         token = _credential.get_token("https://search.azure.com/.default")
         payload = token.token.split(".")[1]
@@ -37,6 +38,14 @@ def _log_identity() -> None:
         logger.info("=== IDENTITY OID: %s ===", claims.get("oid", "N/A"))
     except Exception as exc:
         logger.warning("Identity log failed: %s", exc)
+
+
+def _search_credential():
+    """Use API key if available, otherwise fall back to managed identity."""
+    key = os.environ.get("AZURE_SEARCH_KEY", "")
+    if key:
+        return AzureKeyCredential(key)
+    return _credential
 
 
 def search_knowledge_base(query: str) -> str:
@@ -51,7 +60,7 @@ def search_knowledge_base(query: str) -> str:
     search_client = SearchClient(
         endpoint=os.environ["AZURE_SEARCH_ENDPOINT"],
         index_name=os.environ["AZURE_SEARCH_INDEX"],
-        credential=_credential,
+        credential=_search_credential(),
     )
     try:
         results = list(search_client.search(query, top=5))
