@@ -53,26 +53,34 @@ else
   SEARCH_CREATED=false
   for REGION in "$LOCATION" eastus westus2 westeurope northeurope centralus uksouth; do
     echo "  Trying region: ${REGION}..."
-    if az search service create \
-      --name "$SEARCH_NAME" \
-      --resource-group "$RG" \
-      --location "$REGION" \
-      --sku Standard \
-      --auth-options aadOrApiKey \
-      --aad-auth-failure-mode http401WithBearerChallenge \
-      --output none 2>/tmp/search_create_err; then
-      SEARCH_CREATED=true
-      echo "  ✓ Search service created in ${REGION}"
-      break
-    else
-      ERR=$(cat /tmp/search_create_err)
-      if echo "$ERR" | grep -q "InsufficientResourcesAvailable"; then
-        echo "  Region ${REGION} has no capacity, trying next..."
+    REGION_DELAY=10
+    for ATTEMPT in $(seq 1 12); do
+      if az search service create \
+        --name "$SEARCH_NAME" \
+        --resource-group "$RG" \
+        --location "$REGION" \
+        --sku Standard \
+        --auth-options aadOrApiKey \
+        --aad-auth-failure-mode http401WithBearerChallenge \
+        --output none 2>/tmp/search_create_err; then
+        SEARCH_CREATED=true
+        echo "  ✓ Search service created in ${REGION}"
+        break 2
       else
-        echo "  ERROR: $ERR" >&2
-        exit 1
+        ERR=$(cat /tmp/search_create_err)
+        if echo "$ERR" | grep -q "InsufficientResourcesAvailable"; then
+          echo "  Region ${REGION} has no capacity, trying next..."
+          break
+        elif echo "$ERR" | grep -q "ServiceDeleting"; then
+          echo "  Previous deletion still in progress (attempt ${ATTEMPT}/12), waiting ${REGION_DELAY}s..."
+          sleep "$REGION_DELAY"
+          REGION_DELAY=$((REGION_DELAY * 2 > 120 ? 120 : REGION_DELAY * 2))
+        else
+          echo "  ERROR: $ERR" >&2
+          exit 1
+        fi
       fi
-    fi
+    done
   done
   if [ "$SEARCH_CREATED" = "false" ]; then
     echo "  ERROR: Could not create AI Search service in any region." >&2
