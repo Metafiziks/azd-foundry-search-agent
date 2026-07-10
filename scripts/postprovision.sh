@@ -201,11 +201,6 @@ azd env set AZURE_SEARCH_INDEX "$INDEX_NAME"
 azd env set AZURE_SEARCH_RESOURCE_ID "$SEARCH_RESOURCE_ID"
 
 echo ""
-echo "'# --- Wait for Foundry project API to be ready for agent deployment ---
-# The AI project is created during provisioning, but the Foundry agents API can take
-# 1-2 minutes to become reachable. Poll until it responds before allowing deploy to proceed.
-echo ""
-
 # --- Wait for Foundry project API to be ready for agent deployment ---
 # The AI project is created during provisioning, but the Foundry agents API can take
 # 1-2 minutes to become reachable. Poll until it responds before deploy can proceed.
