@@ -35,11 +35,16 @@ azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "gpt-5"
 # --- AI Search service ---
 echo ""
 echo "► Creating AI Search service: ${SEARCH_NAME}..."
-az search service create   --name "$SEARCH_NAME"   --resource-group "$RG"   --location "$LOCATION"   --sku Standard   --output none 2>/dev/null || echo "  (already exists)"
+"EXISTING_SEARCH=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" --query name -o tsv 2>/dev/null || true)
+if [ "$EXISTING_SEARCH" = "$SEARCH_NAME" ]; then
+  echo "  (already exists)"
+else
+  az search service create --name "$SEARCH_NAME" --resource-group "$RG" --location "$LOCATION" --sku Standard --output none
+fi
 echo "  ✓ Search service ready"
 
 SEARCH_ENDPOINT="https://${SEARCH_NAME}.search.windows.net"
-SEARCH_RESOURCE_ID=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" --query id -o tsv)
+SEARCH_RESOURCE_ID=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" --query id -o tsv)"
 SEARCH_KEY=$(az search admin-key show --service-name "$SEARCH_NAME" --resource-group "$RG" --query primaryKey -o tsv)
 
 # --- Storage account ---
