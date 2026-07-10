@@ -11,13 +11,11 @@ LOCATION="${AZURE_LOCATION:-eastus2}"
 ACCOUNT="${AZURE_AI_ACCOUNT_NAME}"
 
 # Derive globally unique resource names from the azd env name
-SAFE="${AZURE_ENV_NAME//[^a-zA-Z0-9]/-}"
-SAFE="${SAFE,,}"                      # lowercase
-SAFE="${SAFE:0:20}"                   # max 20 chars
+SAFE=$(echo "$AZURE_ENV_NAME" | tr -cs "[:alnum:]" "-" | tr "[:upper:]" "[:lower:]" | cut -c1-20)
+SAFE="${SAFE%-}"  # strip trailing dash
 SEARCH_NAME="${SAFE}-search"
-STORAGE_NAME="${AZURE_ENV_NAME//[^a-zA-Z0-9]/}"
-STORAGE_NAME="${STORAGE_NAME,,}"
-STORAGE_NAME="${STORAGE_NAME:0:20}docs"   # max 24 chars, no hyphens
+STORAGE_NAME=$(echo "$AZURE_ENV_NAME" | tr -cd "[:alnum:]" | tr "[:upper:]" "[:lower:]" | cut -c1-20)
+STORAGE_NAME="${STORAGE_NAME}docs"  # max 24 chars, no hyphens
 INDEX_NAME="${SAFE}-index"
 
 # --- Model deployment ---
