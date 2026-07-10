@@ -262,7 +262,27 @@ arm_token_r = subprocess.run(
 )
 arm_token = arm_token_r.stdout.strip()
 
-def create_cap_host(url, body_dict, label):
+def ensure_cap_host(url, body_dict, label):
+    """Create capability host only if it does not already exist (idempotent).
+    Re-creating/updating a capability host resets the agents runtime initialization,
+    so we skip the PUT entirely if it already exists and is Succeeded."""
+    try:
+        get_req = urllib.request.Request(
+            url,
+            headers={"Authorization": f"Bearer {arm_token}"}
+        )
+        with urllib.request.urlopen(get_req, timeout=30) as resp:
+            existing = _json.loads(resp.read())
+            state = existing.get("properties", {}).get("provisioningState", "")
+            if state in ("Succeeded", "Creating", "Updating"):
+                print(f"  \u2713 {label}: already {state}, skipping", flush=True)
+                return
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            print(f"  \u26a0  {label} GET error {e.code}, will attempt create", flush=True)
+    except Exception:
+        pass
+
     try:
         body = _json.dumps(body_dict).encode()
         req = urllib.request.Request(
@@ -275,10 +295,7 @@ def create_cap_host(url, body_dict, label):
             print(f"  \u2713 {label}: {state}", flush=True)
     except urllib.error.HTTPError as e:
         body_text = e.read().decode()[:300]
-        if e.code in (409, 200):
-            print(f"  \u2713 {label}: already exists", flush=True)
-        else:
-            print(f"  \u26a0  {label} HTTP {e.code}: {body_text}", flush=True)
+        print(f"  \u26a0  {label} HTTP {e.code}: {body_text}", flush=True)
     except Exception as e:
         print(f"  \u26a0  {label}: {type(e).__name__}: {e}", flush=True)
 
@@ -286,13 +303,13 @@ cap_api = "2025-10-01-preview"
 arm_base = f"https://management.azure.com/subscriptions/{sub_id}/resourceGroups/{rg}/providers/Microsoft.CognitiveServices/accounts/{account}"
 
 # Account-level capability host (required first)
-create_cap_host(
+ensure_cap_host(
     f"{arm_base}/capabilityHosts/agents?api-version={cap_api}",
     {"properties": {"capabilityHostKind": "Agents", "enablePublicHostingEnvironment": True}},
     "Account capability host"
 )
 # Project-level capability host
-create_cap_host(
+ensure_cap_host(
     f"{arm_base}/projects/{project}/capabilityHosts/agents?api-version={cap_api}",
     {"properties": {}},
     "Project capability host"
