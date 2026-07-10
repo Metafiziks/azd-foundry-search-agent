@@ -159,24 +159,31 @@ if [ -n "$SEARCH_PRINCIPAL" ] && [ "$SEARCH_PRINCIPAL" != "null" ]; then
     --output none 2>/dev/null || true
   echo "  ✓ Search identity granted Storage Blob Data Reader"
 fi
-# Also grant the Foundry/Cognitive Services account identity Search access.
-# Foundry-hosted agents may use this identity for DefaultAzureCredential.
+# Grant Search access to all Foundry-related identities.
+# Foundry uses multiple identities (hub, project, agent) depending on context.
 echo ""
-echo "► Granting Foundry account identity Search access..."
-AI_PRINCIPAL=$(az cognitiveservices account show \
+echo "► Granting Search access to Foundry identities..."
+
+# Hub (Cognitive Services account) identity
+AI_HUB_PRINCIPAL=$(az cognitiveservices account show \
   --name "$ACCOUNT" --resource-group "$RG" \
   --query "identity.principalId" -o tsv 2>/dev/null || true)
 
-if [ -n "$AI_PRINCIPAL" ] && [ "$AI_PRINCIPAL" != "null" ]; then
-  az role assignment create \
-    --assignee "$AI_PRINCIPAL" \
-    --role "Search Index Data Reader" \
-    --scope "$SEARCH_RESOURCE_ID" \
-    --output none 2>/dev/null || true
-  echo "  ✓ Foundry account identity ($AI_PRINCIPAL) granted Search Index Data Reader"
-else
-  echo "  (no system-assigned identity on Cognitive Services account)"
-fi
+# Project identity
+AI_PROJECT_PRINCIPAL=$(az rest --method GET \
+  --url "https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.CognitiveServices/accounts/${ACCOUNT}/projects/${AZURE_ENV_NAME}?api-version=2025-04-01-preview" \
+  --query "identity.principalId" -o tsv 2>/dev/null || true)
+
+for PRINCIPAL in "$AI_HUB_PRINCIPAL" "$AI_PROJECT_PRINCIPAL"; do
+  if [ -n "$PRINCIPAL" ] && [ "$PRINCIPAL" != "null" ]; then
+    az role assignment create \
+      --assignee "$PRINCIPAL" \
+      --role "Search Index Data Reader" \
+      --scope "$SEARCH_RESOURCE_ID" \
+      --output none 2>/dev/null || true
+    echo "  ✓ Identity $PRINCIPAL granted Search Index Data Reader"
+  fi
+done
 
 # --- Search REST via Python (avoids macOS curl/TLS issues) ---
 echo ""
