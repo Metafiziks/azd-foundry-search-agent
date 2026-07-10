@@ -266,7 +266,7 @@ try:
         capture_output=True, text=True
     )
     arm_token = arm_token_r.stdout.strip()
-    cap_body = _json.dumps({"properties": {"capabilityHostKind": "Agents"}}).encode()
+    cap_body = _json.dumps({"properties": {"capabilityHostKind": "Agents", "enablePublicHostingEnvironment": true}}).encode()
     req = urllib.request.Request(
         cap_url, data=cap_body, method="PUT",
         headers={"Authorization": f"Bearer {arm_token}", "Content-Type": "application/json"}
