@@ -250,7 +250,42 @@ except urllib.error.HTTPError as e:
 except Exception as e:
     print(f"  POST error: {type(e).__name__} — will poll for readiness", flush=True)
 
-# Step 2: Poll agents endpoint until 200
+# Step 2: Create capabilityHost/Agents to register the project with the agents data plane
+# This is the ARM sub-resource that links the Foundry project to the Agents service.
+# Without it, the agents data plane returns "Project not found" indefinitely.
+cap_url = (
+    f"https://management.azure.com/subscriptions/{sub_id}/resourceGroups/{rg}"
+    f"/providers/Microsoft.CognitiveServices/accounts/{account}"
+    f"/projects/{project}/capabilityHosts/agents?api-version=2025-06-01"
+)
+try:
+    arm_token_r = subprocess.run(
+        ["az", "account", "get-access-token",
+         "--resource", "https://management.azure.com",
+         "--query", "accessToken", "-o", "tsv"],
+        capture_output=True, text=True
+    )
+    arm_token = arm_token_r.stdout.strip()
+    cap_body = _json.dumps({"properties": {"capabilityHostKind": "Agents"}}).encode()
+    req = urllib.request.Request(
+        cap_url, data=cap_body, method="PUT",
+        headers={"Authorization": f"Bearer {arm_token}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        resp_data = _json.loads(resp.read())
+        state = resp_data.get("properties", {}).get("provisioningState", "unknown")
+        print(f"  \u2713 Capability host registered: {state}", flush=True)
+except urllib.error.HTTPError as e:
+    body_text = e.read().decode()[:200]
+    if "already exists" in body_text.lower() or e.code == 409:
+        print(f"  \u2713 Capability host already registered", flush=True)
+    else:
+        print(f"  \u26a0  Capability host PUT HTTP {e.code}: {body_text}", flush=True)
+except Exception as e:
+    print(f"  \u26a0  Capability host error: {type(e).__name__}: {e}", flush=True)
+
+# Step 3: Poll agents endpoint until 200
+# Step 3: Poll agents endpoint until 200
 for i in range(180):  # up to 30 minutes
     try:
         token = get_token()
