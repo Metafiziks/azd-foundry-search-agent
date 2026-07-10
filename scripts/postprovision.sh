@@ -202,44 +202,50 @@ azd env set AZURE_SEARCH_RESOURCE_ID "$SEARCH_RESOURCE_ID"
 
 echo ""
 # --- Wait for Foundry project API to be ready for agent deployment ---
-# The AI project ARM resource is created during provisioning, but the Foundry agents API
-# (*.services.ai.azure.com) takes additional time to initialize internally.
-# Without this wait, azd deploy fails with "Project not found" (404).
+# After provisioning, the ARM resource shows "Succeeded" but the Foundry data plane
+# (*.services.ai.azure.com) can take 30-60 minutes to fully initialize internally.
+# We poll both the project endpoint and the agents endpoint to detect readiness.
+# The project endpoint request itself may help trigger initialization.
 echo ""
 echo "► Waiting for Foundry project API to be ready for deployment..."
 python3 - "${ACCOUNT}" "${AZURE_ENV_NAME}" << 'WAIT_EOF'
 import subprocess, sys, time, urllib.request, urllib.error
 
-def get_token(scope):
+def get_token():
     r = subprocess.run(
-        ["az", "account", "get-access-token", "--resource", scope,
+        ["az", "account", "get-access-token",
+         "--resource", "https://cognitiveservices.azure.com",
          "--query", "accessToken", "-o", "tsv"],
         capture_output=True, text=True
     )
     return r.stdout.strip()
 
 account, project = sys.argv[1], sys.argv[2]
-url = f"https://{account}.services.ai.azure.com/api/projects/{project}/agents?api-version=v1"
+base = f"https://{account}.services.ai.azure.com"
+# Poll the project endpoint (not agents) — less restrictive, triggers init
+urls = [
+    f"{base}/api/projects/{project}?api-version=v1",
+    f"{base}/api/projects/{project}/agents?api-version=v1",
+]
 
-for i in range(36):
-    last_code = "unknown"
-    for scope in ["https://cognitiveservices.azure.com", "https://management.azure.com"]:
+for i in range(72):  # up to 12 minutes
+    token = get_token()
+    for url in urls:
         try:
-            token = get_token(scope)
             req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
             with urllib.request.urlopen(req, timeout=15) as resp:
-                print(f"  \u2713 Foundry project API is ready (HTTP {resp.status})", flush=True)
+                print(f"  \u2713 Foundry project API ready (HTTP {resp.status})", flush=True)
                 sys.exit(0)
         except urllib.error.HTTPError as e:
             last_code = f"HTTP {e.code}"
         except Exception as e:
             last_code = type(e).__name__
-    print(f"  Waiting for project API... ({i+1}/36, ~{(i+1)*10}s elapsed, {last_code})", flush=True)
+    elapsed = (i + 1) * 10
+    print(f"  Waiting for project data plane... ({i+1}/72, ~{elapsed}s, {last_code})", flush=True)
     time.sleep(10)
 
-print("  \u26a0  Project API not ready after 6 minutes — if deploy fails, run: azd deploy")
+print("  \u26a0  Project data plane not ready after 12 min — run 'azd deploy' again in ~30 min")
 WAIT_EOF
-
 echo ""
 echo "=== Post-Provision Complete ==="
 echo "  Search : ${SEARCH_ENDPOINT}"
