@@ -46,6 +46,7 @@ search_put(f"/indexes/{index}", {
         {"name": "content",                        "type": "Edm.String",         "searchable": True, "retrievable": True, "analyzer": "en.microsoft"},
         {"name": "metadata_storage_name",          "type": "Edm.String",         "searchable": True, "retrievable": True, "filterable": True},
         {"name": "metadata_storage_path",          "type": "Edm.String",         "retrievable": True},
+        {"name": "source_url",                     "type": "Edm.String",         "retrievable": True},
         {"name": "metadata_storage_last_modified", "type": "Edm.DateTimeOffset", "retrievable": True}
     ],
     "semantic": {
@@ -80,7 +81,8 @@ search_put(f"/indexers/{index}-indexer", {
     },
     "fieldMappings": [
         {"sourceFieldName": "metadata_storage_path", "targetFieldName": "id",
-         "mappingFunction": {"name": "base64Encode"}}
+         "mappingFunction": {"name": "base64Encode"}},
+        {"sourceFieldName": "metadata_storage_path", "targetFieldName": "source_url"}
     ]
 })
 
