@@ -6,63 +6,68 @@ echo "=== Post-Deploy: Granting search permissions to agent ==="
 echo ""
 
 SEARCH_RESOURCE_ID="${AZURE_SEARCH_RESOURCE_ID:-}"
+RG="${AZURE_RESOURCE_GROUP:-}"
 
-if [ -z "$SEARCH_RESOURCE_ID" ]; then
-  echo "⚠  AZURE_SEARCH_RESOURCE_ID not set. Re-run 'azd provision' first."
+if [ -z "$SEARCH_RESOURCE_ID" ] || [ -z "$RG" ]; then
+  echo "⚠  Required environment variables not set. Re-run 'azd provision' first."
   exit 0
 fi
 
-# Invoke the agent with a question that triggers search_knowledge_base.
-# That function logs the hosting identity OID on first call.
-# Run up to 3 times to handle cold starts (container may need time to initialize).
-echo "► Invoking agent to capture hosting identity (triggers search + OID log)..."
-for attempt in 1 2 3; do
-  echo "  Attempt ${attempt}/3..."
-  azd ai agent invoke search-agent \
-    '{"messages":[{"role":"user","content":"What documents are in the knowledge base?"}]}' \
-    > /dev/null 2>&1 || true
-  sleep 5
-done
+# Foundry creates a user-assigned managed identity for the agent using this naming pattern:
+#   {cogservice}-{env_name}-{agent_name}-AgentIdentity
+# Look it up directly from Azure AD by display name (faster and more reliable than log scraping).
+echo "► Locating agent hosting identity..."
 
-# Extract OID from recent container logs using a precise UUID pattern
-LOGS=$(azd ai agent monitor search-agent --tail 200 2>&1 || true)
-HOSTING_OID=$(echo "$LOGS" | grep "IDENTITY OID" \
-  | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' \
-  | head -1 || true)
+COG_ACCOUNT=$(az cognitiveservices account list   --resource-group "$RG"   --query "[0].name" -o tsv 2>/dev/null || true)
 
+HOSTING_OID=""
+if [ -n "$COG_ACCOUNT" ]; then
+  AGENT_IDENTITY_NAME="${COG_ACCOUNT}-${AZURE_ENV_NAME}-search-agent-AgentIdentity"
+  echo "  Looking for: ${AGENT_IDENTITY_NAME}"
+  HOSTING_OID=$(az ad sp list     --display-name "$AGENT_IDENTITY_NAME"     --query "[0].id" -o tsv 2>/dev/null || true)
+fi
+
+# Fallback: invoke the agent and scan recent logs for the OID
 if [ -z "$HOSTING_OID" ]; then
+  echo "  Identity not found by name — invoking agent to capture OID from logs..."
+  for attempt in 1 2 3; do
+    echo "  Attempt ${attempt}/3..."
+    azd ai agent invoke search-agent       '{"messages":[{"role":"user","content":"What documents are in the knowledge base?"}]}'       > /dev/null 2>&1 || true
+    sleep 10
+  done
+  LOGS=$(azd ai agent monitor search-agent --tail 200 2>&1 || true)
+  HOSTING_OID=$(echo "$LOGS" | grep "IDENTITY OID"     | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'     | head -1 || true)
+fi
+
+if [ -n "$HOSTING_OID" ]; then
+  echo "  Hosting identity: ${HOSTING_OID}"
+  echo "► Granting Search Index Data Reader..."
+  az role assignment create     --assignee "$HOSTING_OID"     --role "Search Index Data Reader"     --scope "$SEARCH_RESOURCE_ID"     --output none 2>/dev/null     && echo "  ✓ Permission granted"     || echo "  (role already assigned)"
+else
   echo ""
   echo "⚠  Could not auto-detect hosting identity OID."
-  echo "   Run the agent manually once, then grant the role:"
+  echo "   Grant the role manually after running the agent once:"
   echo ""
-  echo "     azd ai agent invoke search-agent '{\"messages\":[{\"role\":\"user\",\"content\":\"What documents are available?\"}]}'"
   echo "     OID=\$(azd ai agent monitor search-agent --tail 50 2>&1 | grep 'IDENTITY OID' | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)"
   echo "     az role assignment create --assignee \"\$OID\" --role 'Search Index Data Reader' --scope ${SEARCH_RESOURCE_ID}"
   echo ""
-  exit 0
 fi
 
-echo "  Hosting identity: ${HOSTING_OID}"
-echo "► Granting Search Index Data Reader..."
-az role assignment create \
-  --assignee "$HOSTING_OID" \
-  --role "Search Index Data Reader" \
-  --scope "$SEARCH_RESOURCE_ID" \
-  --output none 2>/dev/null \
-  && echo "  ✓ Permission granted" \
-  || echo "  (role already assigned)"
-
-# RBAC assignments can take up to 5 minutes to propagate globally.
+# RBAC assignments propagate globally over 2–10 minutes.
+# The hub and project identities were already granted in postprovision (earlier in the pipeline),
+# so this wait covers the agent identity grant above.
 echo ""
-echo "  Waiting 3 minutes for RBAC propagation..."
-sleep 180
-
-echo "► Verifying agent search..."
-azd ai agent invoke search-agent \
-  '{"messages":[{"role":"user","content":"What are the steps for lockout/tagout?"}]}' \
-  2>&1 | grep -v "^Session\|^Conversation\|^Trace\|^Next\|^azd\|^Set up\|^WARNING\|^\s*$" \
-  | head -15 || true
+echo "  Waiting 5 minutes for RBAC propagation..."
+sleep 300
 
 echo ""
 echo "=== Post-Deploy Complete ==="
+echo ""
+echo "► Test your agent in the Azure AI Foundry portal (recommended — fresh session each time):"
+echo "  https://ai.azure.com"
+echo ""
+echo "  Or invoke from the CLI:"
+echo "  azd ai agent invoke search-agent '{\"messages\":[{\"role\":\"user\",\"content\":\"What documents are available?\"}]}'"
+echo "  Note: the CLI reuses conversation history across invokes. If you see stale"
+echo "  responses, test via the portal instead."
 echo ""
