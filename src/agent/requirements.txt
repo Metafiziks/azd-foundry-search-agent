@@ -1,5 +1,5 @@
-agent-framework>=0.0.10
-agent-framework-foundry-hosting>=0.0.10
-azure-identity>=1.17.0
+agent-framework-foundry
+agent-framework-foundry-hosting>=1.0.0a260630
+debugpy
 azure-search-documents>=11.6.0
-python-dotenv>=1.0.0
+azure-identity>=1.17.0
