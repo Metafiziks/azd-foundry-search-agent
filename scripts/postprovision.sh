@@ -48,12 +48,35 @@ EXISTING_SEARCH=$(az search service show --name "$SEARCH_NAME" --resource-group 
 if [ "$EXISTING_SEARCH" = "$SEARCH_NAME" ]; then
   echo "  (already exists)"
 else
-  az search service create \
-    --name "$SEARCH_NAME" \
-    --resource-group "$RG" \
-    --location "$LOCATION" \
-    --sku Standard \
-    --output none
+  # Try primary location first, then fallback regions if capacity is unavailable
+  SEARCH_CREATED=false
+  SEARCH_LOCATION=""
+  for REGION in "$LOCATION" eastus westus2 westeurope northeurope centralus uksouth; do
+    echo "  Trying region: ${REGION}..."
+    if az search service create \
+      --name "$SEARCH_NAME" \
+      --resource-group "$RG" \
+      --location "$REGION" \
+      --sku Standard \
+      --output none 2>/tmp/search_create_err; then
+      SEARCH_CREATED=true
+      SEARCH_LOCATION="$REGION"
+      break
+    else
+      ERR=$(cat /tmp/search_create_err)
+      if echo "$ERR" | grep -q "InsufficientResourcesAvailable"; then
+        echo "  Region ${REGION} has no capacity, trying next..."
+      else
+        echo "  ERROR: $ERR" >&2
+        exit 1
+      fi
+    fi
+  done
+  if [ "$SEARCH_CREATED" = "false" ]; then
+    echo "  ERROR: Could not create AI Search service in any region. Try again later." >&2
+    exit 1
+  fi
+  echo "  ✓ Search service created in ${SEARCH_LOCATION}"
 fi
 echo "  ✓ Search service ready"
 
