@@ -14,8 +14,6 @@ from azure.search.documents import SearchClient
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Customize these instructions for your domain.
-# The agent will only answer using documents retrieved from the knowledge base.
 INSTRUCTIONS = """
 You are a knowledgeable assistant that answers questions based on the organization's
 documents and procedures.
@@ -75,14 +73,9 @@ def search_knowledge_base(query: str) -> str:
             or str(r)
         )
         source = r.get("metadata_storage_name") or r.get("blob_url") or r.get("source") or ""
-        excerpts.append(f"[{source}]
-{text}" if source else text)
+        excerpts.append(f"[{source}]\n{text}" if source else text)
 
-    return "
-
----
-
-".join(excerpts)
+    return "\n\n---\n\n".join(excerpts)
 
 
 def main():
