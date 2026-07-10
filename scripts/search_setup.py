@@ -52,8 +52,8 @@ search_put(f"/indexes/{index}", {
         "configurations": [{
             "name": "default",
             "prioritizedFields": {
-                "contentFields": [{"fieldName": "content"}],
-                "keywordsFields": [{"fieldName": "metadata_storage_name"}]
+                "prioritizedContentFields": [{"fieldName": "content"}],
+                "prioritizedKeywordsFields": [{"fieldName": "metadata_storage_name"}]
             }
         }]
     }
