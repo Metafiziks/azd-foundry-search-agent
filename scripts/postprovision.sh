@@ -201,15 +201,14 @@ azd env set AZURE_SEARCH_INDEX "$INDEX_NAME"
 azd env set AZURE_SEARCH_RESOURCE_ID "$SEARCH_RESOURCE_ID"
 
 echo ""
-# --- Wait for Foundry project API to be ready for agent deployment ---
-# After provisioning, the ARM resource shows "Succeeded" but the Foundry data plane
-# (*.services.ai.azure.com) can take 30-60 minutes to fully initialize internally.
-# We poll both the project endpoint and the agents endpoint to detect readiness.
-# The project endpoint request itself may help trigger initialization.
+# --- Initialize and wait for Foundry project data plane ---
+# The ARM resource is created by azd provision, but the Foundry data plane
+# initializes lazily. We explicitly trigger initialization via API calls and
+# poll until the project is ready to accept agent deployments.
 echo ""
-echo "► Waiting for Foundry project API to be ready for deployment..."
+echo "► Initializing Foundry project data plane..."
 python3 - "${ACCOUNT}" "${AZURE_ENV_NAME}" << 'WAIT_EOF'
-import subprocess, sys, time, urllib.request, urllib.error
+import subprocess, sys, time, urllib.request, urllib.error, json as _json
 
 def get_token():
     r = subprocess.run(
@@ -222,29 +221,51 @@ def get_token():
 
 account, project = sys.argv[1], sys.argv[2]
 base = f"https://{account}.services.ai.azure.com"
-# Poll the project endpoint (not agents) — less restrictive, triggers init
-urls = [
-    f"{base}/api/projects/{project}?api-version=v1",
-    f"{base}/api/projects/{project}/agents?api-version=v1",
-]
+agents_url = f"{base}/api/projects/{project}/agents?api-version=v1"
+project_url = f"{base}/api/projects/{project}?api-version=v1"
+projects_url = f"{base}/api/projects?api-version=v1"
 
+def try_get(url, token):
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status, None
+    except urllib.error.HTTPError as e:
+        return e.code, None
+    except Exception as e:
+        return None, type(e).__name__
+
+# Attempt 1: POST to projects list to trigger data plane registration
+token = get_token()
+try:
+    body = _json.dumps({"name": project}).encode()
+    req = urllib.request.Request(
+        projects_url, data=body, method="POST",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        print(f"  Project registered via POST (HTTP {resp.status})", flush=True)
+except urllib.error.HTTPError as e:
+    if e.code == 409:
+        print(f"  Project already registered (HTTP 409)", flush=True)
+    else:
+        print(f"  POST returned HTTP {e.code} — will poll for readiness", flush=True)
+except Exception as e:
+    print(f"  POST attempt: {type(e).__name__} — will poll for readiness", flush=True)
+
+# Poll until agents endpoint returns 200
 for i in range(72):  # up to 12 minutes
     token = get_token()
-    for url in urls:
-        try:
-            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                print(f"  \u2713 Foundry project API ready (HTTP {resp.status})", flush=True)
-                sys.exit(0)
-        except urllib.error.HTTPError as e:
-            last_code = f"HTTP {e.code}"
-        except Exception as e:
-            last_code = type(e).__name__
-    elapsed = (i + 1) * 10
-    print(f"  Waiting for project data plane... ({i+1}/72, ~{elapsed}s, {last_code})", flush=True)
+    code, err = try_get(agents_url, token)
+    if code == 200:
+        print(f"  \u2713 Foundry project ready (HTTP 200)", flush=True)
+        sys.exit(0)
+    label = f"HTTP {code}" if code else err
+    print(f"  Waiting... ({i+1}/72, ~{(i+1)*10}s, {label})", flush=True)
     time.sleep(10)
 
-print("  \u26a0  Project data plane not ready after 12 min — run 'azd deploy' again in ~30 min")
+print("  \u26a0  Project data plane not ready after 12 min.")
+print("     If 'azd deploy' fails, open ai.azure.com, click the project, then re-run 'azd deploy'")
 WAIT_EOF
 echo ""
 echo "=== Post-Provision Complete ==="
