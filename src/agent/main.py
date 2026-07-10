@@ -25,16 +25,21 @@ use general knowledge.
 """
 
 _credential = DefaultAzureCredential()
+_oid_logged = False
 
 
 def _log_identity() -> None:
-    """Log the managed identity OID so postdeploy.sh can grant it Search RBAC."""
+    """Log the managed identity OID. Called on first search so postdeploy can capture it."""
+    global _oid_logged
+    if _oid_logged:
+        return
     try:
         token = _credential.get_token("https://search.azure.com/.default")
         payload = token.token.split(".")[1]
         payload += "=" * (4 - len(payload) % 4)
         claims = json.loads(base64.urlsafe_b64decode(payload))
         logger.info("=== IDENTITY OID: %s ===", claims.get("oid", "N/A"))
+        _oid_logged = True
     except Exception as exc:
         logger.warning("Identity log failed: %s", exc)
 
@@ -48,6 +53,8 @@ def search_knowledge_base(query: str) -> str:
     Returns:
         Relevant document excerpts, or a message if nothing is found.
     """
+    _log_identity()  # Emit OID on first call so postdeploy.sh can grant Search RBAC
+
     search_client = SearchClient(
         endpoint=os.environ["AZURE_SEARCH_ENDPOINT"],
         index_name=os.environ["AZURE_SEARCH_INDEX"],
@@ -79,8 +86,6 @@ def search_knowledge_base(query: str) -> str:
 
 
 def main():
-    _log_identity()
-
     client = FoundryChatClient(
         project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
         model=os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"],
