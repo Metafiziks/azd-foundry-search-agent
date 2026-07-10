@@ -157,6 +157,24 @@ if [ -n "$SEARCH_PRINCIPAL" ] && [ "$SEARCH_PRINCIPAL" != "null" ]; then
     --output none 2>/dev/null || true
   echo "  ✓ Search identity granted Storage Blob Data Reader"
 fi
+# Also grant the Foundry/Cognitive Services account identity Search access.
+# Foundry-hosted agents may use this identity for DefaultAzureCredential.
+echo ""
+echo "► Granting Foundry account identity Search access..."
+AI_PRINCIPAL=$(az cognitiveservices account show \
+  --name "$ACCOUNT" --resource-group "$RG" \
+  --query "identity.principalId" -o tsv 2>/dev/null || true)
+
+if [ -n "$AI_PRINCIPAL" ] && [ "$AI_PRINCIPAL" != "null" ]; then
+  az role assignment create \
+    --assignee "$AI_PRINCIPAL" \
+    --role "Search Index Data Reader" \
+    --scope "$SEARCH_RESOURCE_ID" \
+    --output none 2>/dev/null || true
+  echo "  ✓ Foundry account identity ($AI_PRINCIPAL) granted Search Index Data Reader"
+else
+  echo "  (no system-assigned identity on Cognitive Services account)"
+fi
 
 # --- Search REST via Python (avoids macOS curl/TLS issues) ---
 echo ""
