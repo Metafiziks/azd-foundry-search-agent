@@ -258,37 +258,53 @@ except urllib.error.HTTPError as e:
 except Exception as e:
     print(f"  POST error: {type(e).__name__} — will poll for readiness", flush=True)
 
-# Step 2: Poll agents endpoint until 3 consecutive 200s
-# The Foundry agents data plane initializes automatically on fresh accounts (usually
-# within 2-5 minutes). We do NOT manually create capability hosts — doing so resets
-# the initialization timer and can break the remote_build image registry linkage.
-# We require 3 consecutive 200 responses (5s apart) to avoid a false-positive where
-# the list endpoint returns 200 transiently before POST operations are fully ready.
-CONSECUTIVE_REQUIRED = 3
-consecutive_ok = 0
-for i in range(180):  # up to 15 minutes at 5s intervals
+# Step 2: Poll the write path of the agents endpoint
+# The Foundry data plane has separate read/write tiers. GET /agents returns 200
+# before the write path is ready. We probe with a POST (same path azd deploy uses):
+# - "Project not found" 404  => write path not ready, keep waiting
+# - any other response (400/409/200) => write path ready, proceed
+# We do NOT manually create capability hosts — doing so resets the initialization
+# timer and can break the remote_build image registry linkage.
+probe_url = f"{base}/api/projects/{project}/agents/readiness-probe?api-version=v1"
+probe_body = _json.dumps({"name": "readiness-probe", "model": "gpt-4o", "instructions": "probe"}).encode()
+for i in range(360):  # up to 30 minutes at 5s intervals
     try:
         token = get_token()
         req = urllib.request.Request(
-            agents_url, headers={"Authorization": f"******"}
+            probe_url, data=probe_body, method="POST",
+            headers={"Authorization": f"******", "Content-Type": "application/json"}
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
-            consecutive_ok += 1
-            if consecutive_ok >= CONSECUTIVE_REQUIRED:
-                print(f"  \u2713 Foundry project ready (HTTP {resp.status}, stable for {CONSECUTIVE_REQUIRED} checks)", flush=True)
-                sys.exit(0)
-            print(f"  HTTP {resp.status} ({consecutive_ok}/{CONSECUTIVE_REQUIRED} consecutive), confirming stability...", flush=True)
+            # 200/201 means write path is ready (agent created, clean up)
+            print(f"  ✓ Foundry write path ready (HTTP {resp.status})", flush=True)
+            # Try to delete the probe agent
+            try:
+                del_req = urllib.request.Request(
+                    probe_url, method="DELETE",
+                    headers={"Authorization": f"******"}
+                )
+                urllib.request.urlopen(del_req, timeout=10)
+            except Exception:
+                pass
+            sys.exit(0)
     except urllib.error.HTTPError as e:
-        consecutive_ok = 0
-        label = f"HTTP {e.code}"
-        print(f"  Waiting for Foundry data plane sync... ({i+1}/180, ~{(i+1)*5}s elapsed, {label})", flush=True)
+        body_bytes = e.read()
+        try:
+            err_data = _json.loads(body_bytes)
+            err_msg = err_data.get("error", {}).get("message", "")
+        except Exception:
+            err_msg = body_bytes.decode()[:100]
+        if "Project not found" in err_msg:
+            print(f"  Waiting for Foundry write path... ({i+1}/360, ~{(i+1)*5}s elapsed, write-404)", flush=True)
+        else:
+            # Any other error means the project IS reachable for writes
+            print(f"  ✓ Foundry write path ready (HTTP {e.code}: {err_msg[:60]})", flush=True)
+            sys.exit(0)
     except Exception as e:
-        consecutive_ok = 0
-        label = type(e).__name__
-        print(f"  Waiting for Foundry data plane sync... ({i+1}/180, ~{(i+1)*5}s elapsed, {label})", flush=True)
+        print(f"  Waiting for Foundry write path... ({i+1}/360, ~{(i+1)*5}s elapsed, {type(e).__name__})", flush=True)
     time.sleep(5)
 
-print("  \u26a0  Foundry data plane not synced after 15 min.")
+print("  ⚠  Foundry write path not ready after 30 min.")
 print("     Run 'azd deploy' again in 30-60 min. This is an Azure platform delay, not a template bug.")
 print("     Tip: visiting ai.azure.com and clicking your project may accelerate initialization.")
 WAIT_EOF
