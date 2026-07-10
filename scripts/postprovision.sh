@@ -45,12 +45,12 @@ azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "gpt-5"
 echo ""
 echo "► Creating AI Search service: ${SEARCH_NAME}..."
 EXISTING_SEARCH=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" --query name -o tsv 2>/dev/null || true)
+SEARCH_ENDPOINT="https://${SEARCH_NAME}.search.windows.net"
+
 if [ "$EXISTING_SEARCH" = "$SEARCH_NAME" ]; then
   echo "  (already exists)"
 else
-  # Try primary location first, then fallback regions if capacity is unavailable
   SEARCH_CREATED=false
-  SEARCH_LOCATION=""
   for REGION in "$LOCATION" eastus westus2 westeurope northeurope centralus uksouth; do
     echo "  Trying region: ${REGION}..."
     if az search service create \
@@ -60,7 +60,7 @@ else
       --sku Standard \
       --output none 2>/tmp/search_create_err; then
       SEARCH_CREATED=true
-      SEARCH_LOCATION="$REGION"
+      echo "  ✓ Search service created in ${REGION}"
       break
     else
       ERR=$(cat /tmp/search_create_err)
@@ -76,11 +76,24 @@ else
     echo "  ERROR: Could not create AI Search service in any region. Try again later." >&2
     exit 1
   fi
-  echo "  ✓ Search service created in ${SEARCH_LOCATION}"
+
+  # Wait for the Search endpoint to become reachable (DNS + service warm-up)
+  echo "  Waiting for Search service to become ready..."
+  for i in $(seq 1 24); do
+    HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+      "${SEARCH_ENDPOINT}/?api-version=2024-07-01" \
+      -H "api-key: placeholder" 2>/dev/null || true)
+    # 401 or 403 means the endpoint is up (just rejects our placeholder key)
+    # 200 would also be fine
+    if [ "$HTTP" = "401" ] || [ "$HTTP" = "403" ] || [ "$HTTP" = "200" ]; then
+      echo "  ✓ Search endpoint is ready"
+      break
+    fi
+    sleep 5
+  done
 fi
 echo "  ✓ Search service ready"
 
-SEARCH_ENDPOINT="https://${SEARCH_NAME}.search.windows.net"
 SEARCH_RESOURCE_ID=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" --query id -o tsv)
 SEARCH_KEY=$(az search admin-key show --service-name "$SEARCH_NAME" --resource-group "$RG" --query primaryKey -o tsv)
 
@@ -123,7 +136,7 @@ az storage blob upload-batch \
   --output none
 echo "  ✓ Documents uploaded"
 
-# --- Grant Search identity Storage access (for managed-identity indexer) ---
+# --- Grant Search identity Storage access ---
 echo ""
 echo "► Configuring Search identity permissions..."
 SEARCH_PRINCIPAL=$(az search service show \
