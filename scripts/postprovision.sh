@@ -161,7 +161,7 @@ fi
 # --- Search REST via Python (avoids macOS curl/TLS issues) ---
 echo ""
 echo "► Creating search index, data source, and indexer..."
-python3 /tmp/search_setup.py \
+python3 "$(dirname "$0")/search_setup.py" \
   "${SEARCH_ENDPOINT}" \
   "${SEARCH_KEY}" \
   "${INDEX_NAME}" \
