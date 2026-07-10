@@ -54,8 +54,8 @@ az role assignment create \
 
 # RBAC assignments can take up to 5 minutes to propagate globally.
 echo ""
-echo "  Waiting 2 minutes for RBAC propagation..."
-sleep 120
+echo "  Waiting 3 minutes for RBAC propagation..."
+sleep 180
 
 echo "► Verifying agent search..."
 azd ai agent invoke search-agent \
