@@ -1,86 +1,178 @@
 [
   {
-    "id": "hydraulic-leak-response",
+    "id": "emergency-stop-testing-and-failure-action",
     "category": "maintenance",
-    "question": "What should I do if I find a hydraulic leak on the press?",
-    "expected_keywords": ["stop", "notify maintenance", "absorbent pads", "do not operate"],
-    "expected_sources": ["hydraulic_press_troubleshooting.txt"]
+    "question": "For a Line 1 conveyor, how often must emergency stop pull cords and buttons be tested, and what must be done if any emergency stop device fails?",
+    "expected_keywords": [
+      "pull cords",
+      "buttons",
+      "every week",
+      "out of operation",
+      "until the failed"
+    ],
+    "expected_sources": [
+      "conveyor_pm_manual.txt"
+    ]
   },
   {
-    "id": "press-restart-after-maintenance",
+    "id": "weekly-inspection-items-line-2",
     "category": "maintenance",
-    "question": "What must be checked before the hydraulic press is returned to production after maintenance?",
-    "expected_keywords": ["guard placement", "pressure settings", "leak-free", "emergency stop", "dry cycle"],
-    "expected_sources": ["hydraulic_press_troubleshooting.txt"]
+    "question": "During weekly maintenance on a Line 2 conveyor, list all items that technicians must inspect.",
+    "expected_keywords": [
+      "belt tracking",
+      "roller rotation",
+      "drive chain tension",
+      "motor mount bolts",
+      "emergency stop function",
+      "photo eye alignment"
+    ],
+    "expected_sources": [
+      "conveyor_pm_manual.txt"
+    ]
   },
   {
-    "id": "hydraulic-slow-cycle-causes",
+    "id": "low-pressure-checklist-hp120",
     "category": "maintenance",
-    "question": "What could cause slow cycle time on the hydraulic press?",
-    "expected_keywords": ["low fluid temperature", "restricted filters", "worn pump", "air in the hydraulic system"],
-    "expected_sources": ["hydraulic_press_troubleshooting.txt"]
+    "question": "On hydraulic press HP-120 that cannot reach target pressure, what checks does the Hydraulic Press Troubleshooting Guide list for a low pressure condition?",
+    "expected_keywords": [
+      "oil level",
+      "pressure relief valve",
+      "blockage",
+      "wear or damage"
+    ],
+    "expected_sources": [
+      "hydraulic_press_troubleshooting.txt"
+    ]
   },
   {
-    "id": "conveyor-belt-drift",
+    "id": "oil-leak-response-hp130",
     "category": "maintenance",
-    "question": "How should belt tracking be adjusted if the belt drifts to one side?",
-    "expected_keywords": ["debris buildup", "worn rollers", "uneven tension", "small increments"],
-    "expected_sources": ["conveyor_pm_manual.txt"]
+    "question": "If oil is found under or around hydraulic press HP-130 during production, what actions are required according to the guide?",
+    "expected_keywords": [
+      "stop",
+      "notify maintenance",
+      "absorbent materials",
+      "spill response"
+    ],
+    "expected_sources": [
+      "hydraulic_press_troubleshooting.txt"
+    ]
   },
   {
-    "id": "conveyor-emergency-stop-failure",
-    "category": "maintenance",
-    "question": "What should happen if a conveyor emergency stop device fails during weekly testing?",
-    "expected_keywords": ["removed from service", "repaired"],
-    "expected_sources": ["conveyor_pm_manual.txt"]
+    "id": "containment-actions-repeated-defects",
+    "category": "quality",
+    "question": "If repeated defects are found during finished goods inspection, what containment actions are required for the affected lot before shipment?",
+    "expected_keywords": [
+      "stop shipment",
+      "notify Quality Assurance",
+      "affected lot",
+      "good unit",
+      "containment"
+    ],
+    "expected_sources": [
+      "finished_goods_defect_standard.txt"
+    ]
   },
   {
-    "id": "conveyor-monthly-pm-tasks",
-    "category": "maintenance",
-    "question": "What are the monthly preventive maintenance tasks for conveyors?",
-    "expected_keywords": ["lubrication", "gearbox oil level", "belt wear", "guard condition", "electrical conduit"],
-    "expected_sources": ["conveyor_pm_manual.txt"]
+    "id": "packaging-defect-classification",
+    "category": "quality",
+    "question": "According to the Finished Goods Defect Classification Standard, how are packaging-related defects classified: what is the classification for a failed packaging seal versus a minor packaging blemish?",
+    "expected_keywords": [
+      "failed packaging seal",
+      "minor packaging blemish",
+      "major defect",
+      "minor defect"
+    ],
+    "expected_sources": [
+      "finished_goods_defect_standard.txt"
+    ]
   },
   {
-    "id": "loto-when-required",
+    "id": "damaged-missing-coa-quarantine-steps",
+    "category": "quality",
+    "question": "We received a pallet of components that arrived damaged and without a certificate of analysis. Before production can use it, what exactly should we do with this material?",
+    "expected_keywords": [
+      "quarantine",
+      "hold tag",
+      "Quality Assurance",
+      "lot number"
+    ],
+    "expected_sources": [
+      "incoming_material_inspection_standard.txt"
+    ]
+  },
+  {
+    "id": "sampling-for-critical-components-with-issues",
+    "category": "quality",
+    "question": "For a critical component from a supplier with prior issues, what sampling approach must the quality inspector follow during incoming inspection?",
+    "expected_keywords": [
+      "incoming sampling plan",
+      "critical component",
+      "increased sampling frequency",
+      "tightened inspection"
+    ],
+    "expected_sources": [
+      "incoming_material_inspection_standard.txt"
+    ]
+  },
+  {
+    "id": "when-is-line-clearance-required-during-changeover",
+    "category": "quality",
+    "question": "Before restarting production during a changeover, when exactly is line clearance required according to the standard?",
+    "expected_keywords": [
+      "line clearance",
+      "new product",
+      "lot",
+      "work order",
+      "packaging configuration",
+      "label set",
+      "customer-specific build"
+    ],
+    "expected_sources": [
+      "line_clearance_standard.txt"
+    ]
+  },
+  {
+    "id": "actions-when-error-found-after-changeover",
+    "category": "quality",
+    "question": "We found an unapproved fixture after changeover started. What actions does the line clearance standard require before restarting?",
+    "expected_keywords": [
+      "stop the line",
+      "segregate affected product",
+      "notify Quality Assurance",
+      "document the issue"
+    ],
+    "expected_sources": [
+      "line_clearance_standard.txt"
+    ]
+  },
+  {
+    "id": "supervisor-lock-removal-exception-steps",
     "category": "safety",
-    "question": "When is lockout tagout required on production equipment?",
-    "expected_keywords": ["removes a guard", "reaches into a machine", "unexpected startup", "maintenance"],
-    "expected_sources": ["lockout_tagout_procedure.txt"]
+    "question": "As a floor supervisor, what steps are required to remove another employee\u2019s lock under the lockout tagout exception process when that employee is unavailable?",
+    "expected_keywords": [
+      "Plant Safety",
+      "not on site",
+      "inspect the equipment",
+      "document approval",
+      "exception process"
+    ],
+    "expected_sources": [
+      "lockout_tagout_procedure.txt"
+    ]
   },
   {
-    "id": "loto-supervisor-lock-removal",
+    "id": "verify-zero-energy-normal-controls",
     "category": "safety",
-    "question": "Can a supervisor remove another employee's lock if that employee is unavailable?",
-    "expected_keywords": ["formal lock removal exception", "Plant Safety", "not on site", "document"],
-    "expected_sources": ["lockout_tagout_procedure.txt"]
-  },
-  {
-    "id": "critical-defect-classification",
-    "category": "quality",
-    "question": "What is a critical defect and what action must be taken when one is found?",
-    "expected_keywords": ["safety risk", "regulatory", "hold", "Quality Assurance escalation"],
-    "expected_sources": ["finished_goods_defect_standard.txt"]
-  },
-  {
-    "id": "repeated-defects-containment",
-    "category": "quality",
-    "question": "What should a supervisor do when repeated defects are found in a production lot?",
-    "expected_keywords": ["stop shipment", "notify Quality Assurance", "last known good", "containment"],
-    "expected_sources": ["finished_goods_defect_standard.txt"]
-  },
-  {
-    "id": "incoming-material-rejection-criteria",
-    "category": "quality",
-    "question": "What are the criteria for rejecting incoming materials from a supplier?",
-    "expected_keywords": ["damaged", "contaminated", "missing required documentation", "unapproved supplier"],
-    "expected_sources": ["incoming_material_inspection_standard.txt"]
-  },
-  {
-    "id": "line-clearance-required-checks",
-    "category": "quality",
-    "question": "What must be verified during a line clearance before starting a new production run?",
-    "expected_keywords": ["work order number", "product code", "lot number", "labels", "quality approval"],
-    "expected_sources": ["line_clearance_standard.txt"]
+    "question": "After locking out production equipment, how do I verify zero energy using the normal controls, and what should I do with the controls afterward?",
+    "expected_keywords": [
+      "zero energy",
+      "try to start",
+      "start/run controls",
+      "OFF/neutral"
+    ],
+    "expected_sources": [
+      "lockout_tagout_procedure.txt"
+    ]
   }
 ]

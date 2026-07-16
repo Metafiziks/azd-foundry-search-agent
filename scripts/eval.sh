@@ -14,7 +14,7 @@ echo ""
 if [ -z "${FOUNDRY_PROJECT_ENDPOINT:-}" ]; then
   if command -v azd &>/dev/null; then
     echo "► Loading environment from azd..."
-    eval "$(azd env get-values 2>/dev/null)" || true
+    set -a; eval "$(azd env get-values 2>/dev/null)"; set +a
   fi
 fi
 
