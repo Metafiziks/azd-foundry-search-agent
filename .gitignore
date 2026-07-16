@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 .env
 .venv/
+.venv-eval/
 dist/
 *.egg-info/
 .DS_Store
+eval_results.json

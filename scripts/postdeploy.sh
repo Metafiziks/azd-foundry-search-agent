@@ -60,6 +60,27 @@ echo ""
 echo "  Waiting 5 minutes for RBAC propagation..."
 sleep 300
 
+# --- Generate eval cases from docs + run evaluations ---
+echo ""
+echo "► Generating eval cases from docs/..."
+VENV_EVAL="${HOME}/.azd-eval-venv"
+[ -f "${VENV_EVAL}/bin/python3" ] || python3 -m venv "${VENV_EVAL}"
+"${VENV_EVAL}/bin/pip" install azure-identity -q
+
+eval "$(azd env get-values 2>/dev/null)" || true
+
+FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
+AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-gpt-5}" \
+  "${VENV_EVAL}/bin/python3" "$(dirname "$0")/generate_eval_cases.py" || true
+echo ""
+
+echo "► Running automated evaluations..."
+FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
+AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-gpt-5}" \
+  "${VENV_EVAL}/bin/python3" "$(dirname "$0")/run_evals.py" \
+    --output "$(dirname "$(dirname "$0")")/eval_results.json" || true
+echo ""
+
 echo ""
 echo "=== Post-Deploy Complete ==="
 echo ""

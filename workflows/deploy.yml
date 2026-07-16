@@ -1,0 +1,98 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/**"
+      - "scripts/**"
+      - "azure.yaml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write  # needed to commit regenerated eval cases
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      AZURE_ENV_NAME:        ${{ vars.AZURE_ENV_NAME }}
+      AZURE_LOCATION:        ${{ vars.AZURE_LOCATION || 'eastus2' }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install azd
+        uses: azure/setup-azd@v2
+
+      - name: Install azd ai.agents extension
+        run: azd extension add azure.ai.agents
+
+      - name: azd auth (federated)
+        run: azd auth login --client-id "$AZURE_CLIENT_ID" --federated-credential-provider github --tenant-id "$AZURE_TENANT_ID"
+
+      - name: Re-upload docs + re-index (docs changes)
+        if: |
+          github.event_name == 'workflow_dispatch' ||
+          contains(toJson(github.event.commits.*.modified + github.event.commits.*.added + github.event.commits.*.removed), 'docs/')
+        run: |
+          eval "$(azd env get-values)"
+          az storage blob upload-batch \
+            --account-name "${AZURE_STORAGE_ACCOUNT_NAME}" \
+            --destination docs \
+            --source ./docs \
+            --overwrite true \
+            --output none \
+            --auth-mode login
+
+      - name: Re-generate eval cases from updated docs
+        if: |
+          github.event_name == 'workflow_dispatch' ||
+          contains(toJson(github.event.commits.*.modified + github.event.commits.*.added + github.event.commits.*.removed), 'docs/')
+        run: |
+          pip install azure-identity -q
+          eval "$(azd env get-values)"
+          python3 scripts/generate_eval_cases.py
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add tests/eval_cases.json
+          git diff --cached --quiet || (git commit -m "chore: regenerate eval cases from updated docs [skip ci]" && git push)
+
+      - name: Deploy agent (src/script changes)
+        if: |
+          github.event_name == 'workflow_dispatch' ||
+          contains(toJson(github.event.commits.*.modified + github.event.commits.*.added + github.event.commits.*.removed), 'src/') ||
+          contains(toJson(github.event.commits.*.modified + github.event.commits.*.added + github.event.commits.*.removed), 'scripts/') ||
+          contains(toJson(github.event.commits.*.modified + github.event.commits.*.added + github.event.commits.*.removed), 'azure.yaml')
+        run: azd deploy
+
+      - name: Run evaluations
+        run: |
+          pip install azure-identity -q
+          eval "$(azd env get-values)"
+          python3 scripts/run_evals.py --output eval_results.json
+
+      - name: Upload eval results
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: eval_results.json

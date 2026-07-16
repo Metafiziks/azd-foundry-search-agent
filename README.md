@@ -75,6 +75,68 @@ azd up
 | Deploy | Packages and deploys the hosted agent via `remote_build` |
 | Post-deploy | Discovers agent hosting identity, grants `Search Index Data Reader` |
 
+## Automated evaluations
+
+The template includes a built-in eval suite that runs automatically after each `azd up`:
+
+| Metric | Threshold | How it's measured |
+|---|---|---|
+| Faithfulness | ≥ 0.70 | LLM judge: claims grounded in citations |
+| Answer Relevance | ≥ 0.75 | LLM judge: answer addresses the question |
+| Citation Recall | ≥ 0.60 | Expected source doc appeared in citations |
+| Keyword Recall | ≥ 0.65 | Key phrases from expected answer found in response |
+| p95 Latency | ≤ 10,000ms | Wall-clock time for agent response |
+
+```bash
+# Run evals standalone (agent must already be deployed)
+bash scripts/eval.sh
+
+# Deterministic metrics only (no LLM judge, faster)
+bash scripts/eval.sh --no-judge
+```
+
+**Keeping evals in sync with your docs:**
+
+When you update `docs/`, regenerate the eval cases before re-running:
+
+```bash
+eval $(azd env get-values)
+python3 scripts/generate_eval_cases.py   # reads docs/, writes tests/eval_cases.json
+bash scripts/eval.sh
+```
+
+`azd up` does this automatically — the post-deploy script regenerates cases after every doc change.
+
+## CI/CD (GitHub Actions)
+
+Copy the workflow files to activate them:
+
+```bash
+mkdir -p .github/workflows
+cp workflows/*.yml .github/workflows/
+git add .github/workflows && git commit -m "Activate CI workflows" && git push
+```
+
+Required secrets (`Settings → Secrets and variables → Actions`):
+
+| Secret | Value |
+|---|---|
+| `AZURE_CLIENT_ID` | App registration client ID (federated credentials) |
+| `AZURE_TENANT_ID` | Azure tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
+
+Required variables:
+
+| Variable | Value |
+|---|---|
+| `AZURE_ENV_NAME` | Your `azd` environment name |
+| `AZURE_LOCATION` | Azure region (default: `eastus2`) |
+
+**Workflow behavior:**
+
+- `deploy.yml` — triggered on push; re-uploads docs and re-indexes if `docs/` changed; redeploys agent if `src/` or `scripts/` changed; runs evals after deploy
+- `run-evals.yml` — triggered weekly (Monday 6am UTC) and on-demand; runs evals against the deployed agent
+
 ## Bring your own documents
 
 1. Replace the files in `docs/` with your own content. Subdirectory structure is preserved as metadata (e.g., `docs/safety/`, `docs/hr/`, `docs/legal/`).
