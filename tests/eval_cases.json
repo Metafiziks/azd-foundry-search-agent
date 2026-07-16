@@ -1,0 +1,86 @@
+[
+  {
+    "id": "hydraulic-leak-response",
+    "category": "maintenance",
+    "question": "What should I do if I find a hydraulic leak on the press?",
+    "expected_keywords": ["stop", "notify maintenance", "absorbent pads", "do not operate"],
+    "expected_sources": ["hydraulic_press_troubleshooting.txt"]
+  },
+  {
+    "id": "press-restart-after-maintenance",
+    "category": "maintenance",
+    "question": "What must be checked before the hydraulic press is returned to production after maintenance?",
+    "expected_keywords": ["guard placement", "pressure settings", "leak-free", "emergency stop", "dry cycle"],
+    "expected_sources": ["hydraulic_press_troubleshooting.txt"]
+  },
+  {
+    "id": "hydraulic-slow-cycle-causes",
+    "category": "maintenance",
+    "question": "What could cause slow cycle time on the hydraulic press?",
+    "expected_keywords": ["low fluid temperature", "restricted filters", "worn pump", "air in the hydraulic system"],
+    "expected_sources": ["hydraulic_press_troubleshooting.txt"]
+  },
+  {
+    "id": "conveyor-belt-drift",
+    "category": "maintenance",
+    "question": "How should belt tracking be adjusted if the belt drifts to one side?",
+    "expected_keywords": ["debris buildup", "worn rollers", "uneven tension", "small increments"],
+    "expected_sources": ["conveyor_pm_manual.txt"]
+  },
+  {
+    "id": "conveyor-emergency-stop-failure",
+    "category": "maintenance",
+    "question": "What should happen if a conveyor emergency stop device fails during weekly testing?",
+    "expected_keywords": ["removed from service", "repaired"],
+    "expected_sources": ["conveyor_pm_manual.txt"]
+  },
+  {
+    "id": "conveyor-monthly-pm-tasks",
+    "category": "maintenance",
+    "question": "What are the monthly preventive maintenance tasks for conveyors?",
+    "expected_keywords": ["lubrication", "gearbox oil level", "belt wear", "guard condition", "electrical conduit"],
+    "expected_sources": ["conveyor_pm_manual.txt"]
+  },
+  {
+    "id": "loto-when-required",
+    "category": "safety",
+    "question": "When is lockout tagout required on production equipment?",
+    "expected_keywords": ["removes a guard", "reaches into a machine", "unexpected startup", "maintenance"],
+    "expected_sources": ["lockout_tagout_procedure.txt"]
+  },
+  {
+    "id": "loto-supervisor-lock-removal",
+    "category": "safety",
+    "question": "Can a supervisor remove another employee's lock if that employee is unavailable?",
+    "expected_keywords": ["formal lock removal exception", "Plant Safety", "not on site", "document"],
+    "expected_sources": ["lockout_tagout_procedure.txt"]
+  },
+  {
+    "id": "critical-defect-classification",
+    "category": "quality",
+    "question": "What is a critical defect and what action must be taken when one is found?",
+    "expected_keywords": ["safety risk", "regulatory", "hold", "Quality Assurance escalation"],
+    "expected_sources": ["finished_goods_defect_standard.txt"]
+  },
+  {
+    "id": "repeated-defects-containment",
+    "category": "quality",
+    "question": "What should a supervisor do when repeated defects are found in a production lot?",
+    "expected_keywords": ["stop shipment", "notify Quality Assurance", "last known good", "containment"],
+    "expected_sources": ["finished_goods_defect_standard.txt"]
+  },
+  {
+    "id": "incoming-material-rejection-criteria",
+    "category": "quality",
+    "question": "What are the criteria for rejecting incoming materials from a supplier?",
+    "expected_keywords": ["damaged", "contaminated", "missing required documentation", "unapproved supplier"],
+    "expected_sources": ["incoming_material_inspection_standard.txt"]
+  },
+  {
+    "id": "line-clearance-required-checks",
+    "category": "quality",
+    "question": "What must be verified during a line clearance before starting a new production run?",
+    "expected_keywords": ["work order number", "product code", "lot number", "labels", "quality approval"],
+    "expected_sources": ["line_clearance_standard.txt"]
+  }
+]

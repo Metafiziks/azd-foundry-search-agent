@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+"""
+RAG Agent Evaluation Runner — Azure AI Foundry
+-----------------------------------------------
+Evaluates the Foundry hosted agent against a fixed test suite.
+
+Metrics:
+  keyword_recall   (deterministic) — fraction of expected keywords found in the answer
+  citation_recall  (deterministic) — expected source doc appeared in citations (0 or 1)
+  latency_ms       (deterministic) — wall-clock time for the Responses API call
+  faithfulness     (LLM-as-judge)  — every claim grounded in cited sources (0–1)
+  answer_relevance (LLM-as-judge)  — answer fully addresses the question (0–1)
+
+Judge model: gpt-5 via Foundry (separate from the agent's own context)
+
+Pass thresholds (configurable via env vars):
+  THRESHOLD_FAITHFULNESS    default 0.70
+  THRESHOLD_RELEVANCE       default 0.75
+  THRESHOLD_CITATION_RECALL default 0.60
+  THRESHOLD_KEYWORD_RECALL  default 0.65
+  THRESHOLD_P95_LATENCY_MS  default 10000
+
+Usage:
+  # Load env from azd, then run:
+  eval $(azd env get-values) python3 scripts/run_evals.py
+  # or use the wrapper:
+  bash scripts/eval.sh
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+from azure.identity import DefaultAzureCredential
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+FOUNDRY_PROJECT_ENDPOINT = os.environ.get("FOUNDRY_PROJECT_ENDPOINT", "").rstrip("/")
+MODEL_DEPLOYMENT          = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5")
+AGENT_NAME                = os.environ.get("AGENT_NAME", "search-agent")
+RESPONSES_API_VERSION     = "2025-04-01-preview"
+
+THRESHOLDS = {
+    "faithfulness":     float(os.environ.get("THRESHOLD_FAITHFULNESS",    "0.70")),
+    "answer_relevance": float(os.environ.get("THRESHOLD_RELEVANCE",       "0.75")),
+    "citation_recall":  float(os.environ.get("THRESHOLD_CITATION_RECALL", "0.60")),
+    "keyword_recall":   float(os.environ.get("THRESHOLD_KEYWORD_RECALL",  "0.65")),
+    "p95_latency_ms":   float(os.environ.get("THRESHOLD_P95_LATENCY_MS",  "10000")),
+}
+
+EVAL_CASES_PATH = Path(__file__).parent.parent / "tests" / "eval_cases.json"
+DEFAULT_OUTPUT  = Path(__file__).parent.parent / "eval_results.json"
+
+JUDGE_PROMPT = """\
+You are a strict evaluator for a RAG (Retrieval-Augmented Generation) system.
+Score the following answer on two dimensions. Return ONLY valid JSON, no explanation.
+
+Question: {question}
+
+Answer: {answer}
+
+Citations used: {citations}
+
+Score each metric from 1 (very poor) to 5 (excellent):
+
+- faithfulness: Does every factual claim in the answer appear in the cited documents?
+  1=answer contains made-up facts, 5=every claim is grounded in citations
+- answer_relevance: Does the answer fully address what was asked?
+  1=completely off-topic, 5=directly and completely addresses the question
+
+Return exactly:
+{{"faithfulness": <1-5>, "answer_relevance": <1-5>, "reasoning": "<one sentence>"}}"""
+
+# ---------------------------------------------------------------------------
+# Azure helpers
+# ---------------------------------------------------------------------------
+
+_credential = DefaultAzureCredential()
+_token_cache: dict = {}
+
+
+def get_token(scope: str = "https://cognitiveservices.azure.com/.default") -> str:
+    """Get a cached bearer token for the given scope."""
+    now = time.time()
+    if scope in _token_cache and _token_cache[scope]["expires"] > now + 30:
+        return _token_cache[scope]["token"]
+    tok = _credential.get_token(scope)
+    _token_cache[scope] = {"token": tok.token, "expires": tok.expires_on}
+    return tok.token
+
+
+def responses_post(payload: dict) -> dict:
+    """POST to the Foundry Responses API."""
+    import urllib.request, urllib.error
+    url = f"{FOUNDRY_PROJECT_ENDPOINT}/openai/responses?api-version={RESPONSES_API_VERSION}"
+    data = json.dumps(payload).encode()
+    token = get_token()
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:500]
+        raise RuntimeError(f"HTTP {e.code}: {body}") from e
+
+# ---------------------------------------------------------------------------
+# Agent caller
+# ---------------------------------------------------------------------------
+
+def call_agent(question: str) -> tuple[str, list[str], float]:
+    """
+    Call the Foundry hosted agent with a question.
+    Returns (answer_text, citation_filenames, latency_ms).
+    """
+    if not FOUNDRY_PROJECT_ENDPOINT:
+        raise RuntimeError("FOUNDRY_PROJECT_ENDPOINT is not set. Run: eval $(azd env get-values)")
+
+    payload = {
+        "model": AGENT_NAME,
+        "input": [{"role": "user", "content": question}],
+    }
+
+    start = time.time()
+    result = responses_post(payload)
+    latency_ms = (time.time() - start) * 1000
+
+    # Extract answer text from Responses API output
+    answer_parts = []
+    for item in result.get("output", []):
+        if item.get("type") == "message" and item.get("role") == "assistant":
+            for part in item.get("content", []):
+                if part.get("type") == "text":
+                    answer_parts.append(part.get("text", {}).get("value", ""))
+    answer = " ".join(answer_parts).strip()
+
+    # Extract citation filenames from markdown links: [name](url)
+    # Storage URLs look like: .../docs/maintenance/hydraulic_press_troubleshooting.txt
+    citations = re.findall(r"\[([^\]]+)\]\((https?://[^\)]+)\)", answer)
+    filenames = []
+    for _, url in citations:
+        fname = url.rstrip("/").split("/")[-1]
+        if fname:
+            filenames.append(fname)
+    # Also look for bare filenames
+    filenames += re.findall(r"([\w_]+\.txt)", answer)
+    filenames = list(dict.fromkeys(filenames))  # dedupe, preserve order
+
+    return answer, filenames, latency_ms
+
+
+# ---------------------------------------------------------------------------
+# LLM judge
+# ---------------------------------------------------------------------------
+
+def call_judge(question: str, answer: str, citations: list[str]) -> dict:
+    """
+    Call GPT-5 via Foundry to score faithfulness and answer_relevance.
+    Returns {"faithfulness": float 0-1, "answer_relevance": float 0-1, "reasoning": str}.
+    """
+    citation_str = ", ".join(citations) if citations else "none"
+    prompt = JUDGE_PROMPT.format(question=question, answer=answer, citations=citation_str)
+
+    # Use Chat Completions API on the same Foundry endpoint (not the agent)
+    import urllib.request, urllib.error
+    url = f"{FOUNDRY_PROJECT_ENDPOINT}/openai/chat/completions?api-version={RESPONSES_API_VERSION}"
+    payload = {
+        "model": MODEL_DEPLOYMENT,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+        "max_tokens": 256,
+        "response_format": {"type": "json_object"},
+    }
+
+    for attempt in range(4):
+        try:
+            data = json.dumps(payload).encode()
+            token = get_token()
+            req = urllib.request.Request(url, data=data, method="POST")
+            req.add_header("Authorization", f"Bearer {token}")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read())
+            break
+        except Exception as exc:
+            if "429" in str(exc) or "429" in getattr(exc, "code", str(exc)):
+                wait = 10 * (2 ** attempt)
+                print(f" [rate limited, retrying in {wait}s]", end="", flush=True)
+                time.sleep(wait)
+                if attempt == 3:
+                    raise
+            else:
+                raise
+
+    text = result["choices"][0]["message"]["content"].strip()
+    text = re.sub(r"^```json\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+
+    try:
+        scores = json.loads(text)
+    except json.JSONDecodeError:
+        # Fallback: extract numbers with regex
+        f = re.search(r'"faithfulness"\s*:\s*(\d)', text)
+        r_ = re.search(r'"answer_relevance"\s*:\s*(\d)', text)
+        scores = {
+            "faithfulness": int(f.group(1)) if f else 1,
+            "answer_relevance": int(r_.group(1)) if r_ else 1,
+            "reasoning": "parse fallback",
+        }
+
+    return {
+        "faithfulness":     (scores["faithfulness"]    - 1) / 4,  # 1-5 → 0-1
+        "answer_relevance": (scores["answer_relevance"] - 1) / 4,
+        "reasoning": scores.get("reasoning", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Reporting helpers
+# ---------------------------------------------------------------------------
+
+def percentile(values: list[float], p: int) -> float:
+    if not values:
+        return 0.0
+    sorted_vals = sorted(values)
+    idx = max(0, int(len(sorted_vals) * p / 100) - 1)
+    return sorted_vals[idx]
+
+
+def fmt(v) -> str:
+    if isinstance(v, float):
+        return f"{v:.4f}"
+    return str(v)
+
+
+# ---------------------------------------------------------------------------
+# Main eval loop
+# ---------------------------------------------------------------------------
+
+def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
+    results = []
+    latencies = []
+    skipped = 0
+
+    print(f"Loaded {len(cases)} eval cases")
+    print(f"Agent: {FOUNDRY_PROJECT_ENDPOINT} (model={AGENT_NAME})")
+    print(f"Judge: {MODEL_DEPLOYMENT} via Foundry{' (skipped)' if not use_judge else ''}")
+    print()
+
+    for i, case in enumerate(cases, 1):
+        cid   = case["id"]
+        q     = case["question"]
+        kws   = [kw.lower() for kw in case.get("expected_keywords", [])]
+        srcs  = [s.lower() for s in case.get("expected_sources", [])]
+
+        print(f"[{i:2d}/{len(cases)}] {cid} ...", end=" ", flush=True)
+
+        try:
+            answer, citations, latency_ms = call_agent(q)
+            citations_lower = [c.lower() for c in citations]
+
+            # Deterministic metrics
+            kw_hits  = sum(1 for kw in kws if kw in answer.lower())
+            kw_score = kw_hits / len(kws) if kws else 1.0
+            cite_hit = int(any(src in " ".join(citations_lower) for src in srcs))
+
+            # LLM judge
+            if use_judge and answer:
+                judge_scores = call_judge(q, answer, citations)
+                faithfulness    = judge_scores["faithfulness"]
+                answer_relevance = judge_scores["answer_relevance"]
+            else:
+                faithfulness = answer_relevance = None
+
+            latencies.append(latency_ms)
+
+            suffix = f"kw={kw_score:.2f} cite={'✅' if cite_hit else '❌'}"
+            if use_judge:
+                suffix += f" faith={faithfulness:.2f} rel={answer_relevance:.2f}"
+            print(f"{suffix} {latency_ms:.0f}ms")
+
+            results.append({
+                "id": cid,
+                "question": q,
+                "answer": answer,
+                "citations": citations,
+                "keyword_recall": kw_score,
+                "citation_recall": cite_hit,
+                "faithfulness": faithfulness,
+                "answer_relevance": answer_relevance,
+                "latency_ms": latency_ms,
+                "error": None,
+            })
+
+        except Exception as exc:
+            print(f"ERROR: {exc}")
+            skipped += 1
+            results.append({
+                "id": cid, "question": q, "answer": None, "citations": [],
+                "keyword_recall": None, "citation_recall": None,
+                "faithfulness": None, "answer_relevance": None,
+                "latency_ms": None, "error": str(exc),
+            })
+
+    # Aggregate
+    valid = [r for r in results if r["error"] is None]
+    summary = {
+        "keyword_recall":    sum(r["keyword_recall"] for r in valid) / len(valid) if valid else 0,
+        "citation_recall":   sum(r["citation_recall"] for r in valid) / len(valid) if valid else 0,
+        "faithfulness":      sum(r["faithfulness"] for r in valid if r["faithfulness"] is not None) / max(1, sum(1 for r in valid if r["faithfulness"] is not None)),
+        "answer_relevance":  sum(r["answer_relevance"] for r in valid if r["answer_relevance"] is not None) / max(1, sum(1 for r in valid if r["answer_relevance"] is not None)),
+        "p95_latency_ms":    percentile(latencies, 95),
+        "cases_total":       len(cases),
+        "cases_error":       skipped,
+    }
+
+    failures = [k for k, t in THRESHOLDS.items() if summary.get(k, 0) < t]
+    passed   = len(failures) == 0
+
+    # Write JSON output
+    output = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "passed": passed,
+        "summary": summary,
+        "thresholds": THRESHOLDS,
+        "failures": failures,
+        "results": results,
+    }
+    output_path.write_text(json.dumps(output, indent=2))
+    print(f"\nResults saved → {output_path}")
+
+    # Markdown report
+    status = "✅ PASSED" if passed else "❌ FAILED"
+    lines  = [f"\n## Eval Results — {status}", "", "### Summary", ""]
+    lines += ["| Metric | Score | Threshold | Status |", "|--------|-------|-----------|--------|"]
+    metric_labels = {
+        "faithfulness": "Faithfulness",
+        "answer_relevance": "Answer Relevance",
+        "citation_recall": "Citation Recall",
+        "keyword_recall": "Keyword Recall",
+        "p95_latency_ms": "p95 Latency (ms)",
+    }
+    for k, label in metric_labels.items():
+        score = summary.get(k, 0)
+        thr   = THRESHOLDS[k]
+        ok    = "✅" if score >= thr else "❌"
+        val   = f"{score:.4f}" if k != "p95_latency_ms" else f"{score:.0f}"
+        tval  = f"{thr:.4f}" if k != "p95_latency_ms" else f"{thr:.0f}"
+        lines.append(f"| {label} | {val} | {tval} | {ok} |")
+
+    lines += ["", "### Per-Case Results", ""]
+    lines += ["| Case | Faithful | Relevant | Cite✓ | KW✓ | Latency |",
+              "|------|----------|----------|-------|-----|---------|"]
+    for r in results:
+        if r["error"]:
+            lines.append(f"| {r['id']} | ERR | ERR | ERR | ERR | — |")
+        else:
+            f_  = f"{r['faithfulness']:.2f}"  if r["faithfulness"] is not None else "—"
+            rv_ = f"{r['answer_relevance']:.2f}" if r["answer_relevance"] is not None else "—"
+            ci_ = "✅" if r["citation_recall"] else "❌"
+            kw_ = f"{r['keyword_recall']:.2f}"
+            la_ = f"{r['latency_ms']:.0f}ms"
+            lines.append(f"| {r['id']} | {f_} | {rv_} | {ci_} | {kw_} | {la_} |")
+
+    if failures:
+        lines += ["", "### Failures", ""]
+        for f in failures:
+            lines.append(f"- {f}: {summary.get(f, 0):.4f} < {THRESHOLDS[f]:.4f} threshold")
+
+    report = "\n".join(lines)
+    print(report)
+
+    # GitHub Actions step summary
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary:
+        with open(step_summary, "a") as fh:
+            fh.write(report + "\n")
+
+    return output
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output",    default=str(DEFAULT_OUTPUT), help="JSON output path")
+    parser.add_argument("--no-judge",  action="store_true",         help="Skip LLM judge (deterministic only)")
+    parser.add_argument("--cases",     default=str(EVAL_CASES_PATH),help="Path to eval_cases.json")
+    args = parser.parse_args()
+
+    if not FOUNDRY_PROJECT_ENDPOINT:
+        print("ERROR: FOUNDRY_PROJECT_ENDPOINT is not set", file=sys.stderr)
+        print("  Run:  eval $(azd env get-values) && python3 scripts/run_evals.py", file=sys.stderr)
+        sys.exit(1)
+
+    cases = json.loads(Path(args.cases).read_text())
+    output = run_evals(cases, use_judge=not args.no_judge, output_path=Path(args.output))
+
+    sys.exit(0 if output["passed"] else 1)
+
+
+if __name__ == "__main__":
+    main()
