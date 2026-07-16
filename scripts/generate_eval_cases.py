@@ -29,13 +29,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from azure.identity import DefaultAzureCredential
+from azure.identity import AzureCliCredential
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 FOUNDRY_PROJECT_ENDPOINT = os.environ.get("FOUNDRY_PROJECT_ENDPOINT", "").rstrip("/")
+AZURE_OPENAI_ENDPOINT     = os.environ.get("AZURE_OPENAI_ENDPOINT", "").rstrip("/")
 MODEL_DEPLOYMENT          = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5")
 RESPONSES_API_VERSION     = "2025-04-01-preview"
 DOCS_DIR                  = Path(__file__).parent.parent / "docs"
@@ -57,33 +58,38 @@ Rules:
 - Questions must be specific enough that the document above is the clear source
   (e.g. "hydraulic press" not just "press", "lockout tagout" not just "safety")
 - Questions must be answerable entirely from this document — no general knowledge
-- expected_keywords must be 4-6 short phrases (2-5 words each) that would appear
-  in a correct, complete answer. Use exact phrasing from the document where possible.
+- expected_keywords must be 4-6 short, distinct phrases (1-3 words each) that will
+  appear verbatim (case-insensitive) in any correct answer to this question.
+  Use the most specific single noun or short verb phrase from the document.
+  Avoid long multi-word phrases, full sentences, or phrases that the agent might
+  paraphrase instead of quote.
 - expected_sources must be exactly ["{filename}"]
 
-Return ONLY a valid JSON array — no markdown, no explanation:
-[
-  {{
-    "id": "<kebab-case-id>",
-    "category": "{category}",
-    "question": "<question text>",
-    "expected_keywords": ["<phrase1>", "<phrase2>", "<phrase3>", "<phrase4>"],
-    "expected_sources": ["{filename}"]
-  }},
-  {{
-    "id": "<kebab-case-id-2>",
-    "category": "{category}",
-    "question": "<question text>",
-    "expected_keywords": ["<phrase1>", "<phrase2>", "<phrase3>", "<phrase4>"],
-    "expected_sources": ["{filename}"]
-  }}
-]"""
+Return ONLY a valid JSON object with a "cases" key — no markdown, no explanation:
+{{
+  "cases": [
+    {{
+      "id": "<kebab-case-id>",
+      "category": "{category}",
+      "question": "<question text>",
+      "expected_keywords": ["<phrase1>", "<phrase2>", "<phrase3>", "<phrase4>"],
+      "expected_sources": ["{filename}"]
+    }},
+    {{
+      "id": "<kebab-case-id-2>",
+      "category": "{category}",
+      "question": "<question text>",
+      "expected_keywords": ["<phrase1>", "<phrase2>", "<phrase3>", "<phrase4>"],
+      "expected_sources": ["{filename}"]
+    }}
+  ]
+}}"""
 
 # ---------------------------------------------------------------------------
 # Azure helpers
 # ---------------------------------------------------------------------------
 
-_credential = DefaultAzureCredential()
+_credential = AzureCliCredential()
 
 
 def get_token() -> str:
@@ -92,13 +98,12 @@ def get_token() -> str:
 
 
 def chat_complete(prompt: str) -> str:
-    """Call GPT-5 chat completions via Foundry endpoint."""
-    url = f"{FOUNDRY_PROJECT_ENDPOINT}/openai/chat/completions?api-version={RESPONSES_API_VERSION}"
+    """Call GPT-5 chat completions via Azure OpenAI deployment endpoint."""
+    openai_base = AZURE_OPENAI_ENDPOINT if AZURE_OPENAI_ENDPOINT else FOUNDRY_PROJECT_ENDPOINT
+    url = f"{openai_base}/openai/deployments/{MODEL_DEPLOYMENT}/chat/completions?api-version=2024-12-01-preview"
     payload = {
-        "model": MODEL_DEPLOYMENT,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-        "max_tokens": 1024,
+        "max_completion_tokens": 8000,
         "response_format": {"type": "json_object"},
     }
     data = json.dumps(payload).encode()
@@ -106,9 +111,13 @@ def chat_complete(prompt: str) -> str:
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=120) as resp:
         result = json.loads(resp.read())
-    return result["choices"][0]["message"]["content"].strip()
+    msg_content = result["choices"][0]["message"]["content"] or ""
+    if not msg_content.strip():
+        finish = result["choices"][0].get("finish_reason", "unknown")
+        raise RuntimeError(f"Empty model response (finish_reason={finish}; likely reasoning tokens exhausted)")
+    return msg_content.strip()
 
 # ---------------------------------------------------------------------------
 # Generator

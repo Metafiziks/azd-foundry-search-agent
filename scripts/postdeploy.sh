@@ -70,12 +70,14 @@ VENV_EVAL="${HOME}/.azd-eval-venv"
 eval "$(azd env get-values 2>/dev/null)" || true
 
 FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
+AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-}" \
 AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-gpt-5}" \
   "${VENV_EVAL}/bin/python3" "$(dirname "$0")/generate_eval_cases.py" || true
 echo ""
 
 echo "► Running automated evaluations..."
 FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
+AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-}" \
 AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-gpt-5}" \
   "${VENV_EVAL}/bin/python3" "$(dirname "$0")/run_evals.py" \
     --output "$(dirname "$(dirname "$0")")/eval_results.json" || true
