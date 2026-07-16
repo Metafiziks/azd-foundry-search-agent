@@ -206,6 +206,19 @@ azd down --purge
 
 > **Note:** `--purge` permanently deletes the Cognitive Services account. Without it, the account is soft-deleted and the same environment name cannot be reused for 48 hours.
 
+## Comparison across cloud providers
+
+| | This template (Azure) | [AWS](https://github.com/Metafiziks/aws-bedrock-agent) | [GCP](https://github.com/Metafiziks/gcp-search-agent) |
+|---|---|---|---|
+| Provision | `azd provision` | `bash scripts/provision.sh` | `bash scripts/provision.sh` |
+| LLM | GPT-5 (Azure AI Foundry) | Amazon Nova Lite (Bedrock) | Gemini 2.5 Flash (Vertex AI) |
+| Agent SDK | AI Foundry hosted agent | Bedrock Agents (managed) | Google ADK + Cloud Run |
+| RAG | Azure AI Search | Bedrock Knowledge Bases | Vertex AI Search Enterprise |
+| Vector store | Azure AI Search (built-in) | OpenSearch Serverless | Vertex AI Search (built-in) |
+| Auth | Azure OIDC | GitHub OIDC | Workload Identity Federation |
+| Eval judge | GPT-5 | Amazon Nova Pro | Gemini 2.5 Flash |
+| Teardown | `azd down` | `bash scripts/teardown.sh` | `bash scripts/teardown.sh` |
+
 ## Troubleshooting
 
 **`azd deploy` fails with `Project not found`**
