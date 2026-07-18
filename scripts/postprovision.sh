@@ -310,7 +310,171 @@ print("     Run 'azd deploy' again in 30-60 min. This is an Azure platform delay
 print("     Tip: visiting ai.azure.com and clicking your project may accelerate initialization.")
 WAIT_EOF
 echo ""
+
+# --- Log Analytics Workspace + DCE + DCR for ML observability telemetry ---
+echo "► Setting up Log Analytics Workspace for ML observability..."
+LA_WORKSPACE="${SAFE}-law"
+DCE_NAME="${SAFE}-dce"
+DCR_NAME="${SAFE}-dcr"
+
+# Create workspace
+EXISTING_LAW=$(az monitor log-analytics workspace show \
+  --workspace-name "$LA_WORKSPACE" --resource-group "$RG" \
+  --query name -o tsv 2>/dev/null || true)
+if [ "$EXISTING_LAW" != "$LA_WORKSPACE" ]; then
+  az monitor log-analytics workspace create \
+    --workspace-name "$LA_WORKSPACE" \
+    --resource-group "$RG" \
+    --location "$LOCATION" \
+    --output none
+  echo "  ✓ Log Analytics workspace created: ${LA_WORKSPACE}"
+else
+  echo "  (workspace already exists)"
+fi
+
+WORKSPACE_ID=$(az monitor log-analytics workspace show \
+  --workspace-name "$LA_WORKSPACE" --resource-group "$RG" \
+  --query customerId -o tsv)
+WORKSPACE_RESOURCE_ID=$(az monitor log-analytics workspace show \
+  --workspace-name "$LA_WORKSPACE" --resource-group "$RG" \
+  --query id -o tsv)
+
+# Create Data Collection Endpoint
+EXISTING_DCE=$(az monitor data-collection endpoint show \
+  --name "$DCE_NAME" --resource-group "$RG" \
+  --query name -o tsv 2>/dev/null || true)
+if [ "$EXISTING_DCE" != "$DCE_NAME" ]; then
+  az monitor data-collection endpoint create \
+    --name "$DCE_NAME" \
+    --resource-group "$RG" \
+    --location "$LOCATION" \
+    --public-network-access Enabled \
+    --output none
+  echo "  ✓ Data Collection Endpoint created: ${DCE_NAME}"
+fi
+DCE_ENDPOINT=$(az monitor data-collection endpoint show \
+  --name "$DCE_NAME" --resource-group "$RG" \
+  --query logsIngestion.endpoint -o tsv)
+
+# Create custom table AgentTelemetry_CL in the workspace
+az monitor log-analytics workspace table create \
+  --workspace-name "$LA_WORKSPACE" \
+  --resource-group "$RG" \
+  --name "AgentTelemetry_CL" \
+  --columns \
+    TimeGenerated=datetime \
+    RequestId_s=string \
+    Source_s=string \
+    IsBaseline_b=boolean \
+    RetrievalScoreMean_d=real \
+    RetrievalScoreStd_d=real \
+    RetrievalScoreEntropy_d=real \
+    ChunkCount_d=real \
+    RerankerScoreMean_d=real \
+    SearchLatencyMs_d=real \
+    AnswerLength_d=real \
+    CitationCount_d=real \
+    HhemScore_d=real \
+    AnomalyScore_d=real \
+    IsAnomaly_b=boolean \
+    LatencyMs_d=real \
+    Faithfulness_d=real \
+    AnswerRelevance_d=real \
+    KeywordRecall_d=real \
+    CitationRecall_d=real \
+  --output none 2>/dev/null || true
+echo "  ✓ Custom log table AgentTelemetry_CL ready"
+
+# Create Data Collection Rule
+DCE_RESOURCE_ID=$(az monitor data-collection endpoint show \
+  --name "$DCE_NAME" --resource-group "$RG" \
+  --query id -o tsv)
+
+# Build DCR JSON
+cat > /tmp/dcr_def.json << DCR_EOF
+{
+  "location": "${LOCATION}",
+  "properties": {
+    "dataCollectionEndpointId": "${DCE_RESOURCE_ID}",
+    "streamDeclarations": {
+      "Custom-AgentTelemetry_CL": {
+        "columns": [
+          {"name": "TimeGenerated", "type": "datetime"},
+          {"name": "RequestId_s", "type": "string"},
+          {"name": "Source_s", "type": "string"},
+          {"name": "IsBaseline_b", "type": "boolean"},
+          {"name": "RetrievalScoreMean_d", "type": "real"},
+          {"name": "RetrievalScoreStd_d", "type": "real"},
+          {"name": "RetrievalScoreEntropy_d", "type": "real"},
+          {"name": "ChunkCount_d", "type": "real"},
+          {"name": "RerankerScoreMean_d", "type": "real"},
+          {"name": "SearchLatencyMs_d", "type": "real"},
+          {"name": "AnswerLength_d", "type": "real"},
+          {"name": "CitationCount_d", "type": "real"},
+          {"name": "HhemScore_d", "type": "real"},
+          {"name": "AnomalyScore_d", "type": "real"},
+          {"name": "IsAnomaly_b", "type": "boolean"},
+          {"name": "LatencyMs_d", "type": "real"},
+          {"name": "Faithfulness_d", "type": "real"},
+          {"name": "AnswerRelevance_d", "type": "real"},
+          {"name": "KeywordRecall_d", "type": "real"},
+          {"name": "CitationRecall_d", "type": "real"}
+        ]
+      }
+    },
+    "destinations": {
+      "logAnalytics": [{
+        "name": "law-dest",
+        "workspaceResourceId": "${WORKSPACE_RESOURCE_ID}"
+      }]
+    },
+    "dataFlows": [{
+      "streams": ["Custom-AgentTelemetry_CL"],
+      "destinations": ["law-dest"],
+      "outputStream": "Custom-AgentTelemetry_CL",
+      "transformKql": "source"
+    }]
+  }
+}
+DCR_EOF
+
+EXISTING_DCR=$(az monitor data-collection rule show \
+  --name "$DCR_NAME" --resource-group "$RG" \
+  --query name -o tsv 2>/dev/null || true)
+if [ "$EXISTING_DCR" != "$DCR_NAME" ]; then
+  az monitor data-collection rule create \
+    --name "$DCR_NAME" \
+    --resource-group "$RG" \
+    --rule-file /tmp/dcr_def.json \
+    --output none
+  echo "  ✓ Data Collection Rule created: ${DCR_NAME}"
+fi
+DCR_IMMUTABLE_ID=$(az monitor data-collection rule show \
+  --name "$DCR_NAME" --resource-group "$RG" \
+  --query immutableId -o tsv)
+
+# Persist env vars for agent and eval scripts
+azd env set LOG_ANALYTICS_WORKSPACE_ID    "$WORKSPACE_ID"
+azd env set LOG_ANALYTICS_DCE             "$DCE_ENDPOINT"
+azd env set LOG_ANALYTICS_DCR_IMMUTABLE_ID "$DCR_IMMUTABLE_ID"
+azd env set LOG_ANALYTICS_STREAM_NAME    "Custom-AgentTelemetry_CL"
+echo "  ✓ Log Analytics env vars saved"
+
+# Create models container in blob for IsolationForest
+echo ""
+echo "► Creating blob container for ML models..."
+az storage container create \
+  --name models \
+  --account-name "$STORAGE_NAME" \
+  --account-key "$STORAGE_KEY" \
+  --public-access off \
+  --output none 2>/dev/null || true
+echo "  ✓ models container ready"
+
+echo ""
 echo "=== Post-Provision Complete ==="
-echo "  Search : ${SEARCH_ENDPOINT}"
-echo "  Index  : ${INDEX_NAME}"
+echo "  Search              : ${SEARCH_ENDPOINT}"
+echo "  Index               : ${INDEX_NAME}"
+echo "  Log Analytics WS    : ${WORKSPACE_ID}"
+echo "  DCE Endpoint        : ${DCE_ENDPOINT}"
 echo ""

@@ -3,13 +3,20 @@
 import base64
 import json
 import logging
+import math
 import os
+import time
+import uuid
 
 from agent_framework import Agent
 from agent_framework.foundry import FoundryChatClient
 from agent_framework_foundry_hosting import ResponsesHostServer
 from azure.identity import DefaultAzureCredential
 from azure.search.documents import SearchClient
+from azure.search.documents.models import QueryType
+
+import iforest_scorer
+import log_analytics_sink
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,7 +45,6 @@ _credential = DefaultAzureCredential()
 
 
 def _log_identity() -> None:
-    """Log the managed identity OID on every call so it always appears in recent logs."""
     try:
         token = _credential.get_token("https://search.azure.com/.default")
         payload = token.token.split(".")[1]
@@ -50,41 +56,101 @@ def _log_identity() -> None:
 
 
 def search_knowledge_base(query: str) -> str:
-    """Search the knowledge base documents.
+    """Search the knowledge base documents using semantic ranking.
 
     Args:
         query: The search query.
 
     Returns:
-        Relevant document excerpts, or a message if nothing is found.
+        Relevant document excerpts ranked by semantic relevance, or a message if nothing is found.
     """
     _log_identity()
+    request_id = str(uuid.uuid4())
 
     search_client = SearchClient(
         endpoint=os.environ["AZURE_SEARCH_ENDPOINT"],
         index_name=os.environ["AZURE_SEARCH_INDEX"],
         credential=_credential,
     )
+
+    search_start = time.monotonic()
     try:
-        results = list(search_client.search(query, top=5))
+        # Use Azure AI Search semantic ranking — built into the search tier,
+        # no separate API call needed. semantic_configuration_name matches what
+        # search_setup.py creates ("my-semantic-config" or "default").
+        results = list(search_client.search(
+            query,
+            top=8,
+            query_type=QueryType.SEMANTIC,
+            semantic_configuration_name=os.environ.get("AZURE_SEARCH_SEMANTIC_CONFIG", "default"),
+            query_caption="extractive",
+            query_answer="extractive",
+        ))
     except Exception as exc:
-        logger.error("Search error: %s", exc)
-        return f"Search unavailable: {exc}"
+        logger.warning("Semantic search failed, falling back to keyword: %s", exc)
+        try:
+            results = list(search_client.search(query, top=5))
+        except Exception as exc2:
+            logger.error("Search error: %s", exc2)
+            return f"Search unavailable: {exc2}"
+    search_latency_ms = (time.monotonic() - search_start) * 1000
 
     if not results:
         return "No relevant documents found."
 
-    excerpts = []
+    # ── Collect retrieval scores ──────────────────────────────────────────────
+    retrieval_scores  = []
+    reranker_scores   = []   # @search.reranker_score from semantic ranking
     for r in results:
-        text = (
-            r.get("content")
-            or r.get("snippet")
-            or r.get("chunk")
-            or r.get("text")
-            or next((v for v in r.values() if isinstance(v, str) and len(v) > 50), None)
-            or str(r)
+        retrieval_scores.append(float(r.get("@search.score") or 0.0))
+        reranker_scores.append(float(r.get("@search.reranker_score") or 0.0))
+
+    # ── IsolationForest anomaly detection ─────────────────────────────────────
+    anomaly_score, is_anomaly = iforest_scorer.score(
+        retrieval_scores=retrieval_scores,
+        reranker_scores=reranker_scores,
+        search_latency_ms=search_latency_ms,
+    )
+    if is_anomaly:
+        logger.warning(
+            "Anomalous retrieval [request_id=%s]: iforest=%.4f chunks=%d latency=%.0fms",
+            request_id, anomaly_score, len(retrieval_scores), search_latency_ms,
         )
-        source_url = r.get("source_url") or r.get("metadata_storage_path") or ""
+
+    # ── Telemetry (non-blocking) ──────────────────────────────────────────────
+    n      = len(retrieval_scores)
+    mean_r = sum(retrieval_scores) / n
+    std_r  = math.sqrt(sum((s - mean_r) ** 2 for s in retrieval_scores) / n)
+    total  = sum(retrieval_scores) or 1e-10
+    ent_r  = -sum((s / total) * math.log(s / total + 1e-10) for s in retrieval_scores)
+
+    log_analytics_sink.log_async(
+        request_id=request_id,
+        query=query,
+        source="runtime",
+        search_latency_ms=search_latency_ms,
+        retrieval_score_mean=mean_r,
+        retrieval_score_std=std_r,
+        retrieval_score_entropy=ent_r,
+        chunk_count=n,
+        reranker_score_mean=sum(reranker_scores) / len(reranker_scores) if reranker_scores else 0.0,
+        anomaly_score=anomaly_score,
+        is_anomaly=is_anomaly,
+    )
+
+    # ── Build excerpts from top-5 semantically ranked results ─────────────────
+    excerpts = []
+    for r in results[:5]:
+        # Prefer semantic captions (extractive highlights) over raw content
+        captions = r.get("@search.captions") or []
+        text = " ".join(c.text for c in captions if c.text) if captions else ""
+        if not text:
+            text = (
+                r.get("content") or r.get("snippet") or r.get("chunk") or r.get("text")
+                or next((v for v in r.values() if isinstance(v, str) and len(v) > 50), None)
+                or str(r)
+            )
+        source_url  = r.get("source_url") or r.get("metadata_storage_path") or ""
         source_name = r.get("metadata_storage_name") or ""
         if source_url and source_name:
             header = f"[{source_name}]({source_url})"

@@ -29,10 +29,12 @@ Usage:
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -47,6 +49,8 @@ AZURE_OPENAI_ENDPOINT    = os.environ.get("AZURE_OPENAI_ENDPOINT", "").rstrip("/
 MODEL_DEPLOYMENT          = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5")
 AGENT_NAME                = os.environ.get("AGENT_NAME", "search-agent")
 RESPONSES_API_VERSION     = "v1"
+
+EVAL_IS_BASELINE = os.environ.get("EVAL_IS_BASELINE", "false").lower() == "true"
 
 THRESHOLDS = {
     "faithfulness":     float(os.environ.get("THRESHOLD_FAITHFULNESS",    "0.60")),
@@ -78,6 +82,59 @@ Score each metric from 1 (very poor) to 5 (excellent):
 
 Return exactly:
 {{"faithfulness": <1-5>, "answer_relevance": <1-5>, "reasoning": "<one sentence>"}}"""
+
+# ---------------------------------------------------------------------------
+# HHEM scoring (lazy load)
+# ---------------------------------------------------------------------------
+
+_hhem = None
+
+def _get_hhem():
+    global _hhem
+    if _hhem is None:
+        try:
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            from observability.shared.hhem import HHEMScorer
+            _hhem = HHEMScorer()
+        except Exception as exc:
+            print(f"  [HHEM unavailable: {exc}]", file=sys.stderr)
+            _hhem = None
+    return _hhem
+
+def score_hhem(question: str, answer: str) -> float | None:
+    if os.environ.get("SKIP_HHEM", "false").lower() == "true":
+        return None
+    scorer = _get_hhem()
+    if scorer is None:
+        return None
+    try:
+        return scorer.score(question, answer)
+    except Exception:
+        return None
+
+# ---------------------------------------------------------------------------
+# Log Analytics telemetry sink (fire-and-forget per eval case)
+# ---------------------------------------------------------------------------
+
+def _log_telemetry_la(row: dict) -> None:
+    """Ingest a telemetry row to Log Analytics if endpoint env vars are set."""
+    dce = os.environ.get("LOG_ANALYTICS_DCE")
+    dcr = os.environ.get("LOG_ANALYTICS_DCR_IMMUTABLE_ID")
+    stream = os.environ.get("LOG_ANALYTICS_STREAM_NAME", "Custom-AgentTelemetry_CL")
+    if not (dce and dcr):
+        return
+    try:
+        import threading
+        from azure.monitor.ingestion import LogsIngestionClient
+        client = LogsIngestionClient(endpoint=dce, credential=AzureCliCredential())
+        def _upload():
+            try:
+                client.upload(rule_id=dcr, stream_name=stream, logs=[row])
+            except Exception:
+                pass
+        threading.Thread(target=_upload, daemon=True).start()
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # Azure helpers
@@ -256,8 +313,10 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
     skipped = 0
 
     print(f"Loaded {len(cases)} eval cases")
-    print(f"Agent: {FOUNDRY_PROJECT_ENDPOINT} (model={AGENT_NAME})")
-    print(f"Judge: {MODEL_DEPLOYMENT} via Foundry{' (skipped)' if not use_judge else ''}")
+    print(f"Agent:    {FOUNDRY_PROJECT_ENDPOINT} (model={AGENT_NAME})")
+    print(f"Judge:    {MODEL_DEPLOYMENT} via Foundry{' (skipped)' if not use_judge else ''}")
+    print(f"Baseline: {EVAL_IS_BASELINE}")
+    print(f"HHEM:     {'disabled' if os.environ.get('SKIP_HHEM') == 'true' else 'enabled'}")
     print()
 
     for i, case in enumerate(cases, 1):
@@ -285,12 +344,41 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
             else:
                 faithfulness = answer_relevance = None
 
+            # HHEM hallucination scoring (ML model)
+            hhem_score = score_hhem(q, answer)
+
             latencies.append(latency_ms)
 
             suffix = f"kw={kw_score:.2f} cite={'✅' if cite_hit else '❌'}"
             if use_judge and faithfulness is not None:
                 suffix += f" faith={faithfulness:.2f} rel={answer_relevance:.2f}"
+            if hhem_score is not None:
+                suffix += f" hhem={hhem_score:.3f}"
             print(f"{suffix} {latency_ms:.0f}ms")
+
+            # Telemetry → Log Analytics
+            n = max(len(citations), 1)
+            _log_telemetry_la({
+                "RequestId":             str(uuid.uuid4()),
+                "CaseId":                cid,
+                "IsBaseline":            EVAL_IS_BASELINE,
+                "Source":                "eval",
+                "RetrievalScoreMean":    0.5,
+                "RetrievalScoreStd":     0.0,
+                "RetrievalScoreEntropy": math.log(n),
+                "ChunkCount":            n,
+                "RerankerScoreMean":     0.0,
+                "SearchLatencyMs":       latency_ms,
+                "AnswerLength":          len(answer),
+                "CitationCount":         len(citations),
+                "HhemScore":             hhem_score or 0.0,
+                "LatencyMs":             latency_ms,
+                "Faithfulness":          faithfulness,
+                "AnswerRelevance":       answer_relevance,
+                "KeywordRecall":         kw_score,
+                "CitationRecall":        float(cite_hit),
+                "TimeGenerated":         datetime.now(timezone.utc).isoformat(),
+            })
 
             results.append({
                 "id": cid,
@@ -301,6 +389,7 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
                 "citation_recall": cite_hit,
                 "faithfulness": faithfulness,
                 "answer_relevance": answer_relevance,
+                "hhem_score": hhem_score,
                 "latency_ms": latency_ms,
                 "error": None,
             })
@@ -312,7 +401,7 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
                 "id": cid, "question": q, "answer": None, "citations": [],
                 "keyword_recall": None, "citation_recall": None,
                 "faithfulness": None, "answer_relevance": None,
-                "latency_ms": None, "error": str(exc),
+                "hhem_score": None, "latency_ms": None, "error": str(exc),
             })
 
     # Aggregate

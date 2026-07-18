@@ -3,7 +3,7 @@
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template)
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Metafiziks/azd-foundry-search-agent)
 
-An [Azure Developer CLI (azd)](https://aka.ms/azd) template that deploys an **Azure AI Foundry hosted agent** backed by your own document corpus. Ask questions in natural language — the agent synthesizes answers from your documents and cites the source files with direct links. Includes a built-in **automated evaluation suite** that scores every deployment on faithfulness, answer relevance, citation accuracy, and latency using GPT-5 as an LLM judge.
+An [Azure Developer CLI (azd)](https://aka.ms/azd) template that deploys an **Azure AI Foundry hosted agent** backed by your own document corpus. Ask questions in natural language — the agent synthesizes answers from your documents and cites the source files with direct links. Includes a built-in **automated evaluation suite** that scores every deployment on faithfulness, answer relevance, citation accuracy, and latency using GPT-5 as an LLM judge, plus an **ML observability layer** with Azure AI Search semantic ranking, IsolationForest anomaly detection, and HHEM hallucination scoring backed by Log Analytics KQL for alerting.
 
 ```
 Agent: What should a floor supervisor do when equipment fails?
@@ -232,3 +232,104 @@ Occurs when re-running `azd up` soon after `azd down`. The script retries with e
 
 **Agent returns stale responses in CLI**
 The CLI reuses conversation history across invokes. Use the portal playground link (printed after `azd up`) for a fresh session each time.
+
+---
+
+## ML Observability
+
+Beyond pass/fail eval scores, this template ships a production-ready ML observability layer that runs alongside the Foundry hosted agent and learns what "healthy" looks like for your specific document corpus.
+
+### Architecture
+
+```
+Request
+  │
+  ▼
+Foundry Hosted Agent
+  │
+  ├── Azure AI Search  ──→  Semantic ranking (QueryType.SEMANTIC)
+  │   (built-in)              Extracts @search.score + @search.reranker_score
+  │                           No extra API call — semantic tier included in Standard SKU
+  │
+  ├── IsolationForest  ──→  Anomaly score from 6-d feature vector
+  │   (loaded from Blob)      [retrieval_mean, retrieval_std, retrieval_entropy,
+  │                            chunk_count, reranker_mean, search_latency_ms]
+  │
+  └── Log Analytics Sink  ──→  AgentTelemetry_CL custom log table
+                                (DCE ingest via azure-monitor-ingestion SDK)
+                                → KQL queries + series_decompose_anomalies()
+```
+
+### ML Models
+
+| Model | Type | Purpose | Location |
+|-------|------|---------|----------|
+| Azure AI Search Semantic Ranker | Cross-encoder reranker | Re-rank retrieved docs by semantic relevance | AI Search (Standard tier) |
+| `IsolationForest` | Unsupervised anomaly detector | Flag unusual retrieval patterns | Blob Storage `models/iforest.pkl` |
+| `vectara/hallucination_evaluation_model` (HHEM-2.1) | Hallucination classifier | Score answer faithfulness in evals | HuggingFace Hub |
+
+### Auto-training
+
+The `postdeploy.sh` script:
+1. Runs the eval suite 5× with `EVAL_IS_BASELINE=true` → rows ingested to `AgentTelemetry_CL`
+2. Queries those rows via `azure-monitor-query` KQL client
+3. Trains IsolationForest and uploads `iforest.pkl` to Blob Storage `models/` container
+4. Foundry container loads the model on next cold start
+
+The GitHub Actions workflow (`.github/workflows/retrain-observability.yml`) retrains weekly on the last 30 days of Log Analytics data.
+
+### Log Analytics Schema (AgentTelemetry_CL)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `TimeGenerated` | datetime | Ingestion timestamp |
+| `RequestId_s` | string | Unique request UUID |
+| `RetrievalScoreMean_d` | real | Mean Azure AI Search relevance score |
+| `RerankerScoreMean_d` | real | Mean semantic reranker score |
+| `ChunkCount_d` | real | Number of chunks retrieved |
+| `SearchLatencyMs_d` | real | End-to-end retrieval latency (ms) |
+| `HhemScore_d` | real | HHEM hallucination probability (eval runs only) |
+| `AnomalyScore_d` | real | IForest score (negative = more anomalous) |
+| `IsAnomaly_b` | boolean | True if anomaly detected |
+| `IsBaseline_b` | boolean | True for bootstrap training rows |
+
+### KQL Anomaly Queries
+
+```kql
+// Rolling anomaly rate — last 7 days
+AgentTelemetry_CL
+| where TimeGenerated > ago(7d)
+| summarize total=count(), anomalies=countif(IsAnomaly_b == true) by bin(TimeGenerated, 1h)
+| extend anomaly_rate = todouble(anomalies) / total
+| render timechart
+
+// Azure native time-series anomaly detection on retrieval scores
+AgentTelemetry_CL
+| where TimeGenerated > ago(30d)
+| make-series avg_retrieval_score=avg(RetrievalScoreMean_d) on TimeGenerated step 1h
+| extend anomalies=series_decompose_anomalies(avg_retrieval_score)
+| render anomalychart
+
+// HHEM trend — are answers becoming less faithful?
+AgentTelemetry_CL
+| where TimeGenerated > ago(30d)
+| summarize avg_hhem=avg(HhemScore_d) by bin(TimeGenerated, 1d)
+| render timechart
+```
+
+### Weekly Retrain
+
+The `.github/workflows/retrain-observability.yml` workflow triggers every Sunday 02:00 UTC:
+- Queries last 30 days from Log Analytics via `azure-monitor-query` SDK
+- Retrains IsolationForest on production distribution
+- Uploads new `iforest.pkl` to Blob Storage → agent picks up on next cold start
+
+Required GitHub secrets/variables:
+- `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (OIDC)
+- `LOG_ANALYTICS_WORKSPACE_ID` (set automatically by `postprovision.sh`)
+- `BLOB_ACCOUNT_URL` (set automatically by `postprovision.sh`)
+
+To trigger manually:
+```bash
+gh workflow run retrain-observability.yml
+```

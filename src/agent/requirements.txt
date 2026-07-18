@@ -3,3 +3,7 @@ agent-framework-foundry-hosting>=1.0.0a260630
 debugpy
 azure-search-documents>=11.6.0
 azure-identity>=1.17.0
+scikit-learn>=1.4.0
+numpy>=1.26.0
+azure-monitor-ingestion>=1.0.0
+azure-storage-blob>=12.19.0

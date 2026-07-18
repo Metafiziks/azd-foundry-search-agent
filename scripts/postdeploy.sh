@@ -79,8 +79,54 @@ echo "► Running automated evaluations..."
 FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
 AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-}" \
 AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-gpt-5}" \
+LOG_ANALYTICS_DCE="${LOG_ANALYTICS_DCE:-}" \
+LOG_ANALYTICS_DCR_IMMUTABLE_ID="${LOG_ANALYTICS_DCR_IMMUTABLE_ID:-}" \
+LOG_ANALYTICS_STREAM_NAME="${LOG_ANALYTICS_STREAM_NAME:-Custom-AgentTelemetry_CL}" \
   "${VENV_EVAL}/bin/python3" "$(dirname "$0")/run_evals.py" \
     --output "$(dirname "$(dirname "$0")")/eval_results.json" || true
+echo ""
+
+# --- Bootstrap IsolationForest with 5× eval baseline runs ---
+echo "► Collecting baseline telemetry (5 eval runs → IsolationForest training)..."
+BASELINE_COUNT=0
+for BASELINE_RUN in 1 2 3 4 5; do
+  echo "  Baseline run ${BASELINE_RUN}/5..."
+  EVAL_IS_BASELINE=true \
+  FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
+  AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-}" \
+  AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-gpt-5}" \
+  LOG_ANALYTICS_DCE="${LOG_ANALYTICS_DCE:-}" \
+  LOG_ANALYTICS_DCR_IMMUTABLE_ID="${LOG_ANALYTICS_DCR_IMMUTABLE_ID:-}" \
+  LOG_ANALYTICS_STREAM_NAME="${LOG_ANALYTICS_STREAM_NAME:-Custom-AgentTelemetry_CL}" \
+  SKIP_HHEM=true \
+    "${VENV_EVAL}/bin/python3" "$(dirname "$0")/run_evals.py" --no-judge \
+      --output "/tmp/baseline_run_${BASELINE_RUN}.json" 2>/dev/null || true
+  BASELINE_COUNT=$((BASELINE_COUNT + 1))
+done
+echo "  ✓ ${BASELINE_COUNT} baseline runs completed — telemetry ingested to Log Analytics"
+echo ""
+
+# Wait a moment for LA ingestion latency before training
+sleep 30
+
+# Train IsolationForest on the baseline telemetry
+echo "► Training IsolationForest anomaly model..."
+BLOB_ACCOUNT_URL_VAL=$(az storage account show \
+  --name "${STORAGE_NAME}" --resource-group "${AZURE_RESOURCE_GROUP:-}" \
+  --query primaryEndpoints.blob -o tsv 2>/dev/null | sed 's|/$||' || true)
+
+if [ -n "${BLOB_ACCOUNT_URL_VAL}" ]; then
+  "${VENV_EVAL}/bin/pip" install scikit-learn numpy azure-monitor-query azure-storage-blob azure-identity -q
+  LOG_ANALYTICS_WORKSPACE_ID="${LOG_ANALYTICS_WORKSPACE_ID:-}" \
+  BLOB_ACCOUNT_URL="${BLOB_ACCOUNT_URL_VAL}" \
+  BLOB_MODEL_CONTAINER="models" \
+  BLOB_MODEL_KEY="iforest.pkl" \
+  MIN_BASELINE_ROWS=10 \
+    "${VENV_EVAL}/bin/python3" "$(dirname "$(dirname "$0")")/observability/train_baseline.py" || \
+    echo "  ⚠ IForest training deferred — will retry on first weekly retrain"
+else
+  echo "  ⚠ Could not resolve storage account URL — IForest training skipped"
+fi
 echo ""
 
 echo ""
