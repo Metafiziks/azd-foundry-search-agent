@@ -32,6 +32,22 @@ services:
               value: ${AZURE_SEARCH_ENDPOINT}
             - name: AZURE_SEARCH_INDEX
               value: ${AZURE_SEARCH_INDEX}
+            - name: LOG_ANALYTICS_DCE
+              value: ${LOG_ANALYTICS_DCE}
+            - name: LOG_ANALYTICS_DCR_IMMUTABLE_ID
+              value: ${LOG_ANALYTICS_DCR_IMMUTABLE_ID}
+            - name: LOG_ANALYTICS_STREAM_NAME
+              value: ${LOG_ANALYTICS_STREAM_NAME}
+            - name: MEMORY_ENABLED
+              value: ${MEMORY_ENABLED}
+            - name: MEMORY_OPTIONAL
+              value: ${MEMORY_OPTIONAL}
+            - name: MEMORY_STORE_NAME
+              value: ${MEMORY_STORE_NAME}
+            - name: MEMORY_SCOPE
+              value: ${MEMORY_SCOPE}
+            - name: MEMORY_UPDATE_DELAY_SECONDS
+              value: ${MEMORY_UPDATE_DELAY_SECONDS}
         kind: hosted
         metadata:
             tags:

@@ -7,6 +7,8 @@ echo ""
 
 SEARCH_RESOURCE_ID="${AZURE_SEARCH_RESOURCE_ID:-}"
 RG="${AZURE_RESOURCE_GROUP:-}"
+SAFE=$(echo "$AZURE_ENV_NAME" | tr -cs '[:alnum:]' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-20)
+SAFE="${SAFE%-}"
 
 if [ -z "$SEARCH_RESOURCE_ID" ] || [ -z "$RG" ]; then
   echo "⚠  Required environment variables not set. Re-run 'azd provision' first."
@@ -43,6 +45,52 @@ if [ -n "$HOSTING_OID" ]; then
   echo "  Hosting identity: ${HOSTING_OID}"
   echo "► Granting Search Index Data Reader..."
   az role assignment create     --assignee "$HOSTING_OID"     --role "Search Index Data Reader"     --scope "$SEARCH_RESOURCE_ID"     --output none 2>/dev/null     && echo "  ✓ Permission granted"     || echo "  (role already assigned)"
+  COG_RESOURCE_ID=$(az cognitiveservices account show \
+    --name "$COG_ACCOUNT" --resource-group "$RG" \
+    --query id -o tsv 2>/dev/null || true)
+  PROJECT_RESOURCE_ID="${COG_RESOURCE_ID}/projects/${AZURE_ENV_NAME}"
+  if [ -n "$COG_RESOURCE_ID" ]; then
+    for ROLE_SCOPE in "$COG_RESOURCE_ID" "$PROJECT_RESOURCE_ID"; do
+      echo "► Granting Foundry User for memory store read/write access on ${ROLE_SCOPE##*/}..."
+      if az role assignment create \
+        --assignee "$HOSTING_OID" \
+        --role "Foundry User" \
+        --scope "$ROLE_SCOPE" \
+        --output none 2>/dev/null; then
+        echo "  ✓ Foundry User role granted"
+      elif az role assignment create \
+          --assignee "$HOSTING_OID" \
+          --role "Azure AI User" \
+          --scope "$ROLE_SCOPE" \
+          --output none 2>/dev/null; then
+        echo "  ✓ Azure AI User role granted"
+      else
+        echo "  (Foundry/Azure AI User role already assigned or unavailable)"
+      fi
+
+      echo "► Granting Cognitive Services OpenAI User for memory store access on ${ROLE_SCOPE##*/}..."
+      az role assignment create \
+        --assignee "$HOSTING_OID" \
+        --role "Cognitive Services OpenAI User" \
+        --scope "$ROLE_SCOPE" \
+        --output none 2>/dev/null \
+        && echo "  ✓ OpenAI role granted" \
+        || echo "  (OpenAI role already assigned)"
+    done
+  fi
+  DCR_RESOURCE_ID=$(az monitor data-collection rule show \
+    --name "${SAFE}-dcr" --resource-group "$RG" \
+    --query id -o tsv 2>/dev/null || true)
+  if [ -n "$DCR_RESOURCE_ID" ]; then
+    echo "► Granting Monitoring Metrics Publisher for telemetry ingestion..."
+    az role assignment create \
+      --assignee "$HOSTING_OID" \
+      --role "Monitoring Metrics Publisher" \
+      --scope "$DCR_RESOURCE_ID" \
+      --output none 2>/dev/null \
+      && echo "  ✓ Telemetry ingestion role granted" \
+      || echo "  (telemetry role already assigned)"
+  fi
 else
   echo ""
   echo "⚠  Could not auto-detect hosting identity OID."
@@ -72,6 +120,10 @@ eval "$(azd env get-values 2>/dev/null)" || true
 FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
 AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-}" \
 AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-gpt-5}" \
+MEMORY_ENABLED="${MEMORY_ENABLED:-false}" \
+MEMORY_STORE_NAME="${MEMORY_STORE_NAME:-}" \
+MEMORY_SCOPE="${MEMORY_SCOPE:-}" \
+MEMORY_UPDATE_DELAY_SECONDS="${MEMORY_UPDATE_DELAY_SECONDS:-5}" \
   "${VENV_EVAL}/bin/python3" "$(dirname "$0")/generate_eval_cases.py" || true
 echo ""
 
@@ -82,6 +134,10 @@ AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-gpt-5}" \
 LOG_ANALYTICS_DCE="${LOG_ANALYTICS_DCE:-}" \
 LOG_ANALYTICS_DCR_IMMUTABLE_ID="${LOG_ANALYTICS_DCR_IMMUTABLE_ID:-}" \
 LOG_ANALYTICS_STREAM_NAME="${LOG_ANALYTICS_STREAM_NAME:-Custom-AgentTelemetry_CL}" \
+MEMORY_ENABLED="${MEMORY_ENABLED:-false}" \
+MEMORY_STORE_NAME="${MEMORY_STORE_NAME:-}" \
+MEMORY_SCOPE="${MEMORY_SCOPE:-}" \
+MEMORY_UPDATE_DELAY_SECONDS="${MEMORY_UPDATE_DELAY_SECONDS:-5}" \
   "${VENV_EVAL}/bin/python3" "$(dirname "$0")/run_evals.py" \
     --output "$(dirname "$(dirname "$0")")/eval_results.json" || true
 echo ""
@@ -98,6 +154,10 @@ for BASELINE_RUN in 1 2 3 4 5; do
   LOG_ANALYTICS_DCE="${LOG_ANALYTICS_DCE:-}" \
   LOG_ANALYTICS_DCR_IMMUTABLE_ID="${LOG_ANALYTICS_DCR_IMMUTABLE_ID:-}" \
   LOG_ANALYTICS_STREAM_NAME="${LOG_ANALYTICS_STREAM_NAME:-Custom-AgentTelemetry_CL}" \
+  MEMORY_ENABLED="${MEMORY_ENABLED:-false}" \
+  MEMORY_STORE_NAME="${MEMORY_STORE_NAME:-}" \
+  MEMORY_SCOPE="${MEMORY_SCOPE:-}" \
+  MEMORY_UPDATE_DELAY_SECONDS="${MEMORY_UPDATE_DELAY_SECONDS:-5}" \
   SKIP_HHEM=true \
     "${VENV_EVAL}/bin/python3" "$(dirname "$0")/run_evals.py" --no-judge \
       --output "/tmp/baseline_run_${BASELINE_RUN}.json" 2>/dev/null || true

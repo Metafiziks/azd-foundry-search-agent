@@ -3,7 +3,7 @@
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template)
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Metafiziks/azd-foundry-search-agent)
 
-An [Azure Developer CLI (azd)](https://aka.ms/azd) template that deploys an **Azure AI Foundry hosted agent** backed by your own document corpus. Ask questions in natural language — the agent synthesizes answers from your documents and cites the source files with direct links. Includes a built-in **automated evaluation suite** that scores every deployment on faithfulness, answer relevance, citation accuracy, and latency using GPT-5 as an LLM judge, plus an **ML observability layer** with Azure AI Search semantic ranking, IsolationForest anomaly detection, and HHEM hallucination scoring backed by Log Analytics KQL for alerting.
+An [Azure Developer CLI (azd)](https://aka.ms/azd) template that deploys an **Azure AI Foundry hosted agent** backed by your own document corpus. Ask questions in natural language — the agent synthesizes answers from your documents and cites the source files with direct links. Includes a built-in **automated evaluation suite** that scores every deployment on faithfulness, answer relevance, citation accuracy, latency, and memory recall using GPT-5 as an LLM judge, plus an **ML observability layer** with Azure AI Search semantic ranking, Foundry Memory telemetry, IsolationForest anomaly detection, and HHEM hallucination scoring backed by Log Analytics KQL for alerting.
 
 ```
 Agent: What should a floor supervisor do when equipment fails?
@@ -22,6 +22,7 @@ Sources:
 | Resource | Purpose |
 |---|---|
 | Azure AI Foundry | Hosts the agent and gpt-5 model deployment |
+| Azure AI Foundry Memory Store (preview) | Stores scoped user/session memories for continuity |
 | Azure AI Search | Indexes documents and serves semantic search |
 | Azure Blob Storage | Stores the document corpus (public read for citation links) |
 
@@ -32,6 +33,10 @@ User question
      │
      ▼
 Foundry Hosted Agent (Python, remote_build)
+     │
+     ├── Foundry Memory Store (preview)
+     │       user/session preferences and workflow continuity
+     │
      │  calls search_knowledge_base()
      ▼
 Azure AI Search  ◄── indexes every 2 hours
@@ -40,7 +45,9 @@ Azure AI Search  ◄── indexes every 2 hours
 Azure Blob Storage  (docs/ container, public read)
 ```
 
-The agent runs entirely in Foundry's hosting infrastructure — no container registry or ACA environment to manage. Its managed identity is granted `Search Index Data Reader` automatically at deploy time.
+The agent runs entirely in Foundry's hosting infrastructure — no container registry or ACA environment to manage. Its managed identity is granted `Search Index Data Reader` for AI Search and `Cognitive Services OpenAI User` for memory store access automatically at deploy time.
+
+Memory is intentionally separate from document retrieval. Azure AI Search remains the source of truth for procedures and citations; Foundry Memory only supplies scoped continuity such as stable user preferences, session context, or workflow hints.
 
 ## Prerequisites
 
@@ -86,6 +93,7 @@ The template includes a built-in eval suite that runs automatically after each `
 | Citation Recall | ≥ 0.60 | Expected source doc appeared in citations |
 | Keyword Recall | ≥ 0.65 | Key phrases from expected answer found in response |
 | p95 Latency | ≤ 10,000ms | Wall-clock time for agent response |
+| Memory Recall | case-level | Two-turn recall case: first turn stores a preference, second turn asks for it |
 
 ```bash
 # Run evals standalone (agent must already be deployed)
@@ -106,6 +114,8 @@ bash scripts/eval.sh
 ```
 
 `azd up` does this automatically — the post-deploy script regenerates cases after every doc change.
+
+The generator always appends `memory-preference-recall`, a two-turn memory case. If `MEMORY_ENABLED=true` and a `MEMORY_STORE_NAME` exists, evals exercise managed memory with scoped `x-agent-user-id` / `x-memory-user-id` headers. If memory preview provisioning is unavailable and `MEMORY_OPTIONAL=true`, the memory case is marked skipped rather than failing unrelated RAG evals.
 
 ## CI/CD (GitHub Actions)
 
@@ -167,6 +177,19 @@ azd ai agent invoke search-agent \
 
 Or open the agent playground link printed at the end of `azd up`.
 
+## Memory layer (preview)
+
+This template uses Azure AI Foundry Agent Service Memory Store when the current SDK/API and subscription support the preview. `postprovision.sh` deploys an embedding model, creates or reuses `MEMORY_STORE_NAME` through `azure-ai-projects>=2.3.0`, and sets the hosted-agent environment. At runtime, a context provider reads relevant memories before each model call and queues memory updates after the response.
+
+**Behavior and limits:**
+
+- Memory is optional by default because the service is in public preview. Set `MEMORY_OPTIONAL=false` to make provisioning/runtime failures fail fast.
+- Memory is scoped separately from RAG. Use it for user preferences and workflow continuity, not for authoritative procedure content.
+- The default scope is `{{$userId}}` for Foundry-hosted identity scoping. For local or single-tenant testing, set `MEMORY_SCOPE=user:{memory_user_id}` and `MEMORY_USER_ID=<stable-id>`. To force per-session isolation, set `MEMORY_SCOPE=session:{session_id}`.
+- Avoid storing sensitive personal data, secrets, credentials, financial data, or precise location data. The store is configured to favor stable manufacturing workflow preferences.
+
+Memory-specific telemetry is written to `AgentTelemetry_CL` with `MemoryEnabled`, `MemoryReadCount`, `MemoryWriteCount`, `MemoryLatencyMs`, and `MemoryStatus` fields when Log Analytics ingestion is configured.
+
 ## Environment variables
 
 These are set automatically by `azd up` and available as azd env values:
@@ -180,6 +203,12 @@ These are set automatically by `azd up` and available as azd env values:
 | `AZURE_SEARCH_INDEX` | Search index name |
 | `FOUNDRY_PROJECT_ENDPOINT` | Foundry data plane project URL |
 | `AGENT_SEARCH_AGENT_ENDPOINT` | Deployed agent version endpoint |
+| `AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME` | Embedding deployment used by Foundry Memory Store (default `text-embedding-3-small`) |
+| `MEMORY_ENABLED` | Enables Foundry Memory in the hosted agent when `true` |
+| `MEMORY_OPTIONAL` | Allows safe fallback without memory if preview APIs/quotas are unavailable (default `true`) |
+| `MEMORY_STORE_NAME` | Foundry Memory Store name created by `postprovision.sh` |
+| `MEMORY_SCOPE` | Scope template for memory isolation; default `{{$userId}}`, with `{session_id}` and `{memory_user_id}` supported by the local provider |
+| `MEMORY_UPDATE_DELAY_SECONDS` | Debounce before memory writes are committed (default `5` for template/eval friendliness) |
 
 Override region before provisioning:
 
@@ -232,6 +261,12 @@ Occurs when re-running `azd up` soon after `azd down`. The script retries with e
 
 **Agent returns stale responses in CLI**
 The CLI reuses conversation history across invokes. Use the portal playground link (printed after `azd up`) for a fresh session each time.
+
+**Memory eval is skipped**
+Memory is in Foundry preview. Confirm `MEMORY_ENABLED=true`, `MEMORY_STORE_NAME` is set, and the embedding deployment exists. If provisioning logs show preview API, quota, or RBAC errors and `MEMORY_OPTIONAL=true`, the template continues with RAG-only behavior and marks memory evals skipped.
+
+**Memory writes fail with 401/403**
+Grant the deployed agent hosting identity `Cognitive Services OpenAI User` on the Foundry account/project scope. `postdeploy.sh` attempts this automatically after discovering the hosting identity.
 
 ---
 
@@ -292,6 +327,11 @@ The GitHub Actions workflow (`.github/workflows/retrain-observability.yml`) retr
 | `AnomalyScore_d` | real | IForest score (negative = more anomalous) |
 | `IsAnomaly_b` | boolean | True if anomaly detected |
 | `IsBaseline_b` | boolean | True for bootstrap training rows |
+| `MemoryEnabled_b` | boolean | Whether Foundry Memory was enabled for the row |
+| `MemoryReadCount_d` | real | Number of memory records retrieved/injected |
+| `MemoryWriteCount_d` | real | Number of messages queued for memory extraction |
+| `MemoryLatencyMs_d` | real | Memory read/write operation latency |
+| `MemoryStatus_s` | string | Memory operation status (`read_ok`, `write_queued`, `read_failed`, etc.) |
 
 ### KQL Anomaly Queries
 

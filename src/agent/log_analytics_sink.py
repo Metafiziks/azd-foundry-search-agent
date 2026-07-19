@@ -6,7 +6,7 @@ Ingests structured telemetry rows via the Azure Monitor Logs Ingestion API
 is never blocked.
 
 Required env vars:
-  LOG_ANALYTICS_DCE_ENDPOINT  — e.g. https://xxx.ingest.monitor.azure.com
+  LOG_ANALYTICS_DCE_ENDPOINT or LOG_ANALYTICS_DCE — e.g. https://xxx.ingest.monitor.azure.com
   LOG_ANALYTICS_DCR_IMMUTABLE_ID — e.g. dcr-xxxxxxxxxxxxxxxx
   LOG_ANALYTICS_STREAM_NAME   — e.g. Custom-AgentTelemetry_CL (default)
 """
@@ -20,7 +20,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DCE_ENDPOINT  = os.environ.get("LOG_ANALYTICS_DCE_ENDPOINT", "")
+DCE_ENDPOINT  = os.environ.get("LOG_ANALYTICS_DCE_ENDPOINT") or os.environ.get("LOG_ANALYTICS_DCE", "")
 DCR_ID        = os.environ.get("LOG_ANALYTICS_DCR_IMMUTABLE_ID", "")
 STREAM_NAME   = os.environ.get("LOG_ANALYTICS_STREAM_NAME", "Custom-AgentTelemetry_CL")
 
@@ -66,19 +66,24 @@ def log_async(
     request_id: str,
     query: str,
     source: str = "runtime",
-    search_latency_ms: float,
-    retrieval_score_mean: float,
-    retrieval_score_std: float,
-    retrieval_score_entropy: float,
-    chunk_count: int,
-    reranker_score_mean: float,
-    anomaly_score: float,
-    is_anomaly: bool,
+    search_latency_ms: float = 0.0,
+    retrieval_score_mean: float = 0.0,
+    retrieval_score_std: float = 0.0,
+    retrieval_score_entropy: float = 0.0,
+    chunk_count: int = 0,
+    reranker_score_mean: float = 0.0,
+    anomaly_score: float = 0.0,
+    is_anomaly: bool = False,
     is_baseline: bool = False,
     answer_length: Optional[int] = None,
     citation_count: Optional[int] = None,
     hhem_score: Optional[float] = None,
     latency_ms: Optional[float] = None,
+    memory_enabled: Optional[bool] = None,
+    memory_read_count: Optional[int] = None,
+    memory_write_count: Optional[int] = None,
+    memory_latency_ms: Optional[float] = None,
+    memory_status: Optional[str] = None,
 ) -> None:
     """Enqueue a telemetry row to Log Analytics. Returns immediately."""
     row = {
@@ -99,5 +104,10 @@ def log_async(
         "CitationCount":          citation_count,
         "HhemScore":              round(hhem_score, 6) if hhem_score is not None else None,
         "LatencyMs":              round(latency_ms, 2) if latency_ms is not None else None,
+        "MemoryEnabled":          memory_enabled,
+        "MemoryReadCount":        memory_read_count,
+        "MemoryWriteCount":       memory_write_count,
+        "MemoryLatencyMs":        round(memory_latency_ms, 2) if memory_latency_ms is not None else None,
+        "MemoryStatus":           memory_status,
     }
     threading.Thread(target=_write, args=(row,), daemon=True).start()

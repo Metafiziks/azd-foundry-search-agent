@@ -2,6 +2,10 @@
 
 This directory contains the document corpus that the agent searches.
 
+The corpus is independent of the optional Foundry Memory Store. Documents remain
+the source of truth for RAG answers and citations; memory is only for scoped
+user/session continuity such as preferences or workflow context.
+
 ## Default content
 
 The default docs are sample manufacturing operations documents:

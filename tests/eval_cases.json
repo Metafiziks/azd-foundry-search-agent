@@ -175,5 +175,23 @@
     "expected_sources": [
       "lockout_tagout_procedure.txt"
     ]
+  },
+  {
+    "id": "memory-preference-recall",
+    "category": "memory",
+    "memory": true,
+    "turns": [
+      {
+        "question": "Please remember this for future manufacturing support: my preferred maintenance shift is second shift and my preferred unit label is Line 2."
+      },
+      {
+        "question": "For my future manufacturing support requests, which maintenance shift and unit label should you use for me?"
+      }
+    ],
+    "expected_keywords": [
+      "second shift",
+      "Line 2"
+    ],
+    "expected_sources": []
   }
 ]
