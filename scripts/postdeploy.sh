@@ -128,6 +128,7 @@ MEMORY_UPDATE_DELAY_SECONDS="${MEMORY_UPDATE_DELAY_SECONDS:-5}" \
 echo ""
 
 echo "► Running automated evaluations..."
+POSTDEPLOY_EVAL_ARGS="${POSTDEPLOY_EVAL_ARGS:-}"
 FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
 AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-}" \
 AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-gpt-5}" \
@@ -138,31 +139,39 @@ MEMORY_ENABLED="${MEMORY_ENABLED:-false}" \
 MEMORY_STORE_NAME="${MEMORY_STORE_NAME:-}" \
 MEMORY_SCOPE="${MEMORY_SCOPE:-}" \
 MEMORY_UPDATE_DELAY_SECONDS="${MEMORY_UPDATE_DELAY_SECONDS:-5}" \
+EVAL_INTER_CASE_WAIT_SECONDS="${EVAL_INTER_CASE_WAIT_SECONDS:-60}" \
+EVAL_AGENT_TIMEOUT_SECONDS="${EVAL_AGENT_TIMEOUT_SECONDS:-420}" \
+SKIP_HHEM="${SKIP_HHEM:-false}" \
   "${VENV_EVAL}/bin/python3" "$(dirname "$0")/run_evals.py" \
-    --output "$(dirname "$(dirname "$0")")/eval_results.json" || true
+    --output "$(dirname "$(dirname "$0")")/eval_results.json" ${POSTDEPLOY_EVAL_ARGS} || true
 echo ""
 
 # --- Bootstrap IsolationForest with 5× eval baseline runs ---
-echo "► Collecting baseline telemetry (5 eval runs → IsolationForest training)..."
+BASELINE_RUNS="${BASELINE_RUNS:-5}"
+echo "► Collecting baseline telemetry (${BASELINE_RUNS} eval runs → IsolationForest training)..."
 BASELINE_COUNT=0
-for BASELINE_RUN in 1 2 3 4 5; do
-  echo "  Baseline run ${BASELINE_RUN}/5..."
-  EVAL_IS_BASELINE=true \
-  FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
-  AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-}" \
-  AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-gpt-5}" \
-  LOG_ANALYTICS_DCE="${LOG_ANALYTICS_DCE:-}" \
-  LOG_ANALYTICS_DCR_IMMUTABLE_ID="${LOG_ANALYTICS_DCR_IMMUTABLE_ID:-}" \
-  LOG_ANALYTICS_STREAM_NAME="${LOG_ANALYTICS_STREAM_NAME:-Custom-AgentTelemetry_CL}" \
-  MEMORY_ENABLED="${MEMORY_ENABLED:-false}" \
-  MEMORY_STORE_NAME="${MEMORY_STORE_NAME:-}" \
-  MEMORY_SCOPE="${MEMORY_SCOPE:-}" \
-  MEMORY_UPDATE_DELAY_SECONDS="${MEMORY_UPDATE_DELAY_SECONDS:-5}" \
-  SKIP_HHEM=true \
-    "${VENV_EVAL}/bin/python3" "$(dirname "$0")/run_evals.py" --no-judge \
-      --output "/tmp/baseline_run_${BASELINE_RUN}.json" 2>/dev/null || true
-  BASELINE_COUNT=$((BASELINE_COUNT + 1))
-done
+if [ "$BASELINE_RUNS" -gt 0 ]; then
+  for BASELINE_RUN in $(seq 1 "$BASELINE_RUNS"); do
+    echo "  Baseline run ${BASELINE_RUN}/${BASELINE_RUNS}..."
+    EVAL_IS_BASELINE=true \
+    FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
+    AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-}" \
+    AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-gpt-5}" \
+    LOG_ANALYTICS_DCE="${LOG_ANALYTICS_DCE:-}" \
+    LOG_ANALYTICS_DCR_IMMUTABLE_ID="${LOG_ANALYTICS_DCR_IMMUTABLE_ID:-}" \
+    LOG_ANALYTICS_STREAM_NAME="${LOG_ANALYTICS_STREAM_NAME:-Custom-AgentTelemetry_CL}" \
+    MEMORY_ENABLED="${MEMORY_ENABLED:-false}" \
+    MEMORY_STORE_NAME="${MEMORY_STORE_NAME:-}" \
+    MEMORY_SCOPE="${MEMORY_SCOPE:-}" \
+    MEMORY_UPDATE_DELAY_SECONDS="${MEMORY_UPDATE_DELAY_SECONDS:-5}" \
+    EVAL_INTER_CASE_WAIT_SECONDS="${EVAL_INTER_CASE_WAIT_SECONDS:-60}" \
+    EVAL_AGENT_TIMEOUT_SECONDS="${EVAL_AGENT_TIMEOUT_SECONDS:-420}" \
+    SKIP_HHEM=true \
+      "${VENV_EVAL}/bin/python3" "$(dirname "$0")/run_evals.py" --no-judge \
+        --output "/tmp/baseline_run_${BASELINE_RUN}.json" 2>/dev/null || true
+    BASELINE_COUNT=$((BASELINE_COUNT + 1))
+  done
+fi
 echo "  ✓ ${BASELINE_COUNT} baseline runs completed — telemetry ingested to Log Analytics"
 echo ""
 

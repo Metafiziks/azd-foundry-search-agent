@@ -117,6 +117,8 @@ bash scripts/eval.sh
 
 The generator always appends `memory-preference-recall`, a two-turn memory case. If `MEMORY_ENABLED=true` and a `MEMORY_STORE_NAME` exists, evals exercise managed memory with scoped `x-agent-user-id` / `x-memory-user-id` headers. If memory preview provisioning is unavailable and `MEMORY_OPTIONAL=true`, the memory case is marked skipped rather than failing unrelated RAG evals.
 
+For quota-constrained Foundry deployments, the eval runner supports `EVAL_AGENT_TIMEOUT_SECONDS`, `EVAL_INTER_CASE_WAIT_SECONDS`, `EVAL_WARMUP_ENABLED`, and `EVAL_WARMUP_QUESTION`. `postdeploy.sh` also honors `POSTDEPLOY_EVAL_ARGS` and `BASELINE_RUNS`; set `BASELINE_RUNS=0` only when you intentionally want to skip extra telemetry-only baseline runs for IsolationForest training.
+
 ## CI/CD (GitHub Actions)
 
 Copy the workflow files to activate them:
@@ -208,6 +210,7 @@ These are set automatically by `azd up` and available as azd env values:
 | `MEMORY_OPTIONAL` | Allows safe fallback without memory if preview APIs/quotas are unavailable (default `true`) |
 | `MEMORY_STORE_NAME` | Foundry Memory Store name created by `postprovision.sh` |
 | `MEMORY_SCOPE` | Scope template for memory isolation; default `{{$userId}}`, with `{session_id}` and `{memory_user_id}` supported by the local provider |
+| `MEMORY_INCLUDE_STATIC_PROFILE` | Injects static profile memories on every request when `true`; default `false` keeps profile memories limited to memory/preference-style questions so RAG answers remain source-of-truth |
 | `MEMORY_UPDATE_DELAY_SECONDS` | Debounce before memory writes are committed (default `5` for template/eval friendliness) |
 
 Override region before provisioning:
@@ -267,6 +270,9 @@ Memory is in Foundry preview. Confirm `MEMORY_ENABLED=true`, `MEMORY_STORE_NAME`
 
 **Memory writes fail with 401/403**
 Grant the deployed agent hosting identity `Cognitive Services OpenAI User` on the Foundry account/project scope. `postdeploy.sh` attempts this automatically after discovering the hosting identity.
+
+**Generated evals timeout or hit transient 500/503**
+Foundry hosted agents can be cold-started or quota constrained. Increase `EVAL_AGENT_TIMEOUT_SECONDS`, add `EVAL_INTER_CASE_WAIT_SECONDS`, keep warmup enabled, or run `POSTDEPLOY_EVAL_ARGS=--no-judge` when validating deterministic RAG/memory behavior separately from judge-model availability. The runner still fails real answer-quality issues instead of marking failed responses as passing.
 
 ---
 

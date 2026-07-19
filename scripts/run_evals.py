@@ -32,6 +32,7 @@ import json
 import math
 import os
 import re
+import socket
 import sys
 import time
 import uuid
@@ -66,6 +67,10 @@ MEMORY_EVAL_ENABLED = (
 EVAL_MEMORY_USER_ID = os.environ.get("EVAL_MEMORY_USER_ID", f"eval-user-{os.environ.get('AZURE_ENV_NAME', 'local')}")
 EVAL_MEMORY_SESSION_ID = os.environ.get("EVAL_MEMORY_SESSION_ID", f"eval-session-{uuid.uuid4()}")
 EVAL_MEMORY_SETTLE_SECONDS = int(os.environ.get("EVAL_MEMORY_SETTLE_SECONDS", "20"))
+EVAL_AGENT_TIMEOUT_SECONDS = int(os.environ.get("EVAL_AGENT_TIMEOUT_SECONDS", "420"))
+EVAL_INTER_CASE_WAIT_SECONDS = int(os.environ.get("EVAL_INTER_CASE_WAIT_SECONDS", "60"))
+EVAL_WARMUP_ENABLED = os.environ.get("EVAL_WARMUP_ENABLED", "true").lower() != "false"
+EVAL_WARMUP_QUESTION = os.environ.get("EVAL_WARMUP_QUESTION", "What documents are available?")
 
 THRESHOLDS = {
     "faithfulness":     float(os.environ.get("THRESHOLD_FAITHFULNESS",    "0.60")),
@@ -185,7 +190,7 @@ def responses_post(payload: dict, extra_headers: dict[str, str] | None = None) -
         for name, value in (extra_headers or {}).items():
             req.add_header(name, value)
         try:
-            with urllib.request.urlopen(req, timeout=300) as resp:
+            with urllib.request.urlopen(req, timeout=EVAL_AGENT_TIMEOUT_SECONDS) as resp:
                 result = json.loads(resp.read())
         except urllib.error.HTTPError as e:
             body = e.read().decode()[:500]
@@ -195,6 +200,14 @@ def responses_post(payload: dict, extra_headers: dict[str, str] | None = None) -
                 time.sleep(wait)
                 continue
             raise RuntimeError(f"HTTP {e.code}: {body}") from e
+        except (TimeoutError, socket.timeout, urllib.error.URLError) as e:
+            is_timeout = isinstance(e, (TimeoutError, socket.timeout)) or "timed out" in str(e).lower()
+            if is_timeout and _attempt < 4:
+                wait = 90 * (1 + _attempt)
+                print(f" [agent timeout after {EVAL_AGENT_TIMEOUT_SECONDS}s, retrying in {wait}s]", end="", flush=True)
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"Agent request timed out or failed before response: {e}") from e
 
         # Agent-level rate limit: HTTP 200 but status=failed with rate_limit error
         if result.get("status") == "failed":
@@ -376,10 +389,18 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
     print(f"Memory:   {'enabled' if MEMORY_EVAL_ENABLED else 'skipped'}")
     print()
 
+    if EVAL_WARMUP_ENABLED:
+        print("Warmup ...", end=" ", flush=True)
+        try:
+            _, _, warmup_latency_ms = call_agent(EVAL_WARMUP_QUESTION)
+            print(f"{warmup_latency_ms:.0f}ms")
+        except Exception as exc:
+            print(f"non-fatal warmup error: {exc}")
+
     for i, case in enumerate(cases, 1):
         # Pause between cases: agent's internal gpt-5 quota needs to partially reset
-        if i > 1:
-            inter_wait = 420
+        if i > 1 and EVAL_INTER_CASE_WAIT_SECONDS > 0:
+            inter_wait = EVAL_INTER_CASE_WAIT_SECONDS
             print(f"  [waiting {inter_wait}s between cases for container restart + quota reset]", flush=True)
             time.sleep(inter_wait)
 

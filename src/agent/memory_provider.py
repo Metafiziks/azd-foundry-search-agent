@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -153,7 +154,10 @@ class TelemetryFoundryMemoryProvider(ContextProvider):
         read_count = 0
 
         try:
-            if not state.get("memory_initialized"):
+            use_static_memories = env_bool("MEMORY_INCLUDE_STATIC_PROFILE", default=False) or bool(
+                re.search(r"\b(me|my|mine|remember|preference|preferred|usual|future|saved|profile)\b", query, re.I)
+            )
+            if use_static_memories and not state.get("memory_initialized"):
                 static_result = await self.project_client.beta.memory_stores.search_memories(
                     name=self.memory_store_name,
                     scope=scope,
@@ -175,7 +179,7 @@ class TelemetryFoundryMemoryProvider(ContextProvider):
             if getattr(search_result, "memories", None):
                 state["previous_memory_search_id"] = getattr(search_result, "search_id", None)
 
-            memories = list(state.get("static_memories", [])) + self._memory_contents(search_result)
+            memories = (list(state.get("static_memories", [])) if use_static_memories else []) + self._memory_contents(search_result)
             read_count = len([m for m in memories if m])
             if read_count:
                 memory_text = "\n".join(m for m in memories if m)
