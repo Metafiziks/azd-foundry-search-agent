@@ -47,7 +47,11 @@ from azure.identity import AzureCliCredential
 FOUNDRY_PROJECT_ENDPOINT = os.environ.get("FOUNDRY_PROJECT_ENDPOINT", "").rstrip("/")
 AZURE_OPENAI_ENDPOINT    = os.environ.get("AZURE_OPENAI_ENDPOINT", "").rstrip("/")
 MODEL_DEPLOYMENT          = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5")
-AGENT_NAME                = os.environ.get("AGENT_NAME", "search-agent")
+# azd stores the agent name as AGENT_SEARCH_AGENT_NAME; AGENT_NAME may be empty string
+AGENT_NAME                = (os.environ.get("AGENT_NAME") or
+                             os.environ.get("AGENT_SEARCH_AGENT_NAME", "search-agent"))
+# Use pre-built responses endpoint from azd if available
+_RESPONSES_ENDPOINT_ENV  = os.environ.get("AGENT_SEARCH_AGENT_RESPONSES_ENDPOINT", "")
 RESPONSES_API_VERSION     = "v1"
 
 EVAL_IS_BASELINE = os.environ.get("EVAL_IS_BASELINE", "false").lower() == "true"
@@ -157,19 +161,44 @@ def get_token(scope: str = "https://ai.azure.com") -> str:
 def responses_post(payload: dict) -> dict:
     """POST to the agent-specific Responses API endpoint."""
     import urllib.request, urllib.error
-    # Use agent-specific endpoint: /agents/{name}/endpoint/protocols/openai/responses
-    url = f"{FOUNDRY_PROJECT_ENDPOINT}/agents/{AGENT_NAME}/endpoint/protocols/openai/responses?api-version={RESPONSES_API_VERSION}"
+    # Prefer pre-built endpoint from azd; fall back to constructing from project endpoint
+    url = (_RESPONSES_ENDPOINT_ENV or
+           f"{FOUNDRY_PROJECT_ENDPOINT}/agents/{AGENT_NAME}/endpoint/protocols/openai/responses?api-version={RESPONSES_API_VERSION}")
     data = json.dumps(payload).encode()
-    token = get_token("https://ai.azure.com")
-    req = urllib.request.Request(url, data=data, method="POST")
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()[:500]
-        raise RuntimeError(f"HTTP {e.code}: {body}") from e
+
+    for _attempt in range(5):
+        token = get_token("https://ai.azure.com/.default")
+        req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                result = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()[:500]
+            if e.code in (500, 503) and _attempt < 4:
+                wait = 90 * (1 + _attempt)  # 90/180/270/360s — container needs time to restart
+                print(f" [agent {e.code}, retrying in {wait}s]", end="", flush=True)
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"HTTP {e.code}: {body}") from e
+
+        # Agent-level rate limit: HTTP 200 but status=failed with rate_limit error
+        if result.get("status") == "failed":
+            err = result.get("error", {})
+            err_code = (err.get("code", "") if isinstance(err, dict) else str(err)).lower()
+            err_msg  = (err.get("message", "") if isinstance(err, dict) else str(err)).lower()
+            if ("rate_limit" in err_code or "rate_limit" in err_msg) and _attempt < 4:
+                wait = 120 * (_attempt + 1)
+                print(f" [agent rate-limited, retrying in {wait}s]", end="", flush=True)
+                time.sleep(wait)
+                continue
+            raw_msg = (err.get("message", str(err)) if isinstance(err, dict) else str(err))
+            raise RuntimeError(f"Agent status=failed: {raw_msg[:300]}")
+
+        return result
+
+    raise RuntimeError("responses_post: exceeded max retries")
 
 # ---------------------------------------------------------------------------
 # Agent caller
@@ -254,7 +283,7 @@ def call_judge(question: str, answer: str, citations: list[str]) -> dict:
             break
         except Exception as exc:
             if "429" in str(exc) or "429" in getattr(exc, "code", str(exc)):
-                wait = 10 * (2 ** attempt)
+                wait = 30 * (2 ** attempt)  # 30/60/120/240s
                 print(f" [rate limited, retrying in {wait}s]", end="", flush=True)
                 time.sleep(wait)
                 if attempt == 3:
@@ -320,6 +349,12 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
     print()
 
     for i, case in enumerate(cases, 1):
+        # Pause between cases: agent's internal gpt-5 quota needs to partially reset
+        if i > 1:
+            inter_wait = 420
+            print(f"  [waiting {inter_wait}s between cases for container restart + quota reset]", flush=True)
+            time.sleep(inter_wait)
+
         cid   = case["id"]
         q     = case["question"]
         kws   = [kw.lower() for kw in case.get("expected_keywords", [])]
@@ -393,6 +428,8 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
                 "latency_ms": latency_ms,
                 "error": None,
             })
+            # Incremental save so results survive an early stop
+            output_path.write_text(json.dumps({"results": results, "partial": True}, indent=2))
 
         except Exception as exc:
             print(f"ERROR: {exc}")

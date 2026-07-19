@@ -25,6 +25,7 @@ def _pipeline():
     return pipeline(
         "text-classification",
         model=MODEL_NAME,
+        trust_remote_code=True,
         # Use CPU by default; set device=0 for GPU
     )
 
@@ -52,3 +53,9 @@ def score_hallucination(question: str, answer: str) -> float:
     except Exception as exc:
         logger.warning("HHEM scoring failed: %s", exc)
         return 0.5  # neutral fallback
+
+
+class HHEMScorer:
+    """Convenience wrapper so eval runners can do: scorer = HHEMScorer(); scorer.score(q, a)"""
+    def score(self, question: str, answer: str) -> float:
+        return score_hallucination(question, answer)
