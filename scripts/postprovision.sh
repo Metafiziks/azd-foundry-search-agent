@@ -40,6 +40,38 @@ else
 fi
 
 azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "gpt-5"
+AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-5"
+
+echo "► Checking embedding deployment for Foundry Memory..."
+EMBEDDING_DEPLOYMENT="${AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME:-text-embedding-3-small}"
+if az cognitiveservices account deployment show \
+  --name "$ACCOUNT" \
+  --resource-group "$RG" \
+  --deployment-name "$EMBEDDING_DEPLOYMENT" \
+  --query name -o tsv >/dev/null 2>&1; then
+  echo "  ✓ Embedding deployment already exists: ${EMBEDDING_DEPLOYMENT}"
+else
+  echo "  Deploying embedding model: ${EMBEDDING_DEPLOYMENT}..."
+  if az cognitiveservices account deployment create \
+    --name "$ACCOUNT" \
+    --resource-group "$RG" \
+    --deployment-name "$EMBEDDING_DEPLOYMENT" \
+    --model-name "text-embedding-3-small" \
+    --model-version "1" \
+    --model-format "OpenAI" \
+    --sku-name "Standard" \
+    --sku-capacity 10 \
+    --output none; then
+    echo "  ✓ Embedding model deployed: ${EMBEDDING_DEPLOYMENT}"
+  else
+    echo "  ⚠ Could not deploy embedding model; managed memory will be disabled unless MEMORY_OPTIONAL=false."
+    if [ "${MEMORY_OPTIONAL:-true}" = "false" ]; then
+      exit 1
+    fi
+    azd env set MEMORY_ENABLED "false"
+  fi
+fi
+azd env set AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME "$EMBEDDING_DEPLOYMENT"
 
 # --- AI Search service ---
 echo ""
@@ -194,6 +226,28 @@ for PRINCIPAL in "$AI_HUB_PRINCIPAL" "$AI_PROJECT_PRINCIPAL"; do
   fi
 done
 
+COG_RESOURCE_ID=$(az cognitiveservices account show \
+  --name "$ACCOUNT" --resource-group "$RG" \
+  --query id -o tsv)
+PROJECT_RESOURCE_ID="${COG_RESOURCE_ID}/projects/${AZURE_ENV_NAME}"
+for PRINCIPAL in "$AI_HUB_PRINCIPAL" "$AI_PROJECT_PRINCIPAL"; do
+  if [ -n "$PRINCIPAL" ] && [ "$PRINCIPAL" != "null" ]; then
+    for ROLE_SCOPE in "$COG_RESOURCE_ID" "$PROJECT_RESOURCE_ID"; do
+      az role assignment create \
+        --assignee "$PRINCIPAL" \
+        --role "Foundry User" \
+        --scope "$ROLE_SCOPE" \
+        --output none 2>/dev/null || true
+      az role assignment create \
+        --assignee "$PRINCIPAL" \
+        --role "Cognitive Services OpenAI User" \
+        --scope "$ROLE_SCOPE" \
+        --output none 2>/dev/null || true
+    done
+    echo "  ✓ Identity $PRINCIPAL granted Foundry/OpenAI roles for memory"
+  fi
+done
+
 # --- Search REST via Python (avoids macOS curl/TLS issues) ---
 echo ""
 echo "► Creating search index, data source, and indexer..."
@@ -311,6 +365,45 @@ print("     Tip: visiting ai.azure.com and clicking your project may accelerate 
 WAIT_EOF
 echo ""
 
+# --- Azure AI Foundry Memory Store (preview) ---
+echo "► Setting up Azure AI Foundry Memory Store..."
+MEMORY_OPTIONAL="${MEMORY_OPTIONAL:-true}"
+if [ -z "${MEMORY_STORE_NAME:-}" ]; then
+  MEMORY_STORE_NAME="${SAFE}-memory"
+fi
+if [ -z "${MEMORY_SCOPE:-}" ]; then
+  MEMORY_SCOPE='{{$userId}}'
+fi
+MEMORY_UPDATE_DELAY_SECONDS="${MEMORY_UPDATE_DELAY_SECONDS:-5}"
+
+azd env set MEMORY_OPTIONAL "$MEMORY_OPTIONAL"
+azd env set MEMORY_STORE_NAME "$MEMORY_STORE_NAME"
+azd env set MEMORY_SCOPE "$MEMORY_SCOPE"
+azd env set MEMORY_UPDATE_DELAY_SECONDS "$MEMORY_UPDATE_DELAY_SECONDS"
+
+if [ "${MEMORY_ENABLED:-true}" = "false" ]; then
+  echo "  (memory disabled by MEMORY_ENABLED=false)"
+else
+  VENV_MEMORY="${HOME}/.azd-memory-venv"
+  [ -f "${VENV_MEMORY}/bin/python3" ] || python3 -m venv "${VENV_MEMORY}"
+  "${VENV_MEMORY}/bin/pip" install "azure-ai-projects>=2.3.0" azure-identity aiohttp -q
+
+  if MEMORY_STORE_NAME="$MEMORY_STORE_NAME" \
+     AZURE_AI_MODEL_DEPLOYMENT_NAME="$AZURE_AI_MODEL_DEPLOYMENT_NAME" \
+     AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME="$EMBEDDING_DEPLOYMENT" \
+     "${VENV_MEMORY}/bin/python3" "$(dirname "$0")/provision_memory_store.py"; then
+    azd env set MEMORY_ENABLED "true"
+    echo "  ✓ Memory store ready: ${MEMORY_STORE_NAME}"
+  else
+    echo "  ⚠ Memory store provisioning failed."
+    if [ "$MEMORY_OPTIONAL" = "false" ]; then
+      exit 1
+    fi
+    azd env set MEMORY_ENABLED "false"
+    echo "  Continuing without memory because MEMORY_OPTIONAL=true."
+  fi
+fi
+
 # --- Log Analytics Workspace + DCE + DCR for ML observability telemetry ---
 echo "► Setting up Log Analytics Workspace for ML observability..."
 LA_WORKSPACE="${SAFE}-law"
@@ -382,6 +475,11 @@ az monitor log-analytics workspace table create \
     AnswerRelevance_d=real \
     KeywordRecall_d=real \
     CitationRecall_d=real \
+    MemoryEnabled_b=boolean \
+    MemoryReadCount_d=real \
+    MemoryWriteCount_d=real \
+    MemoryLatencyMs_d=real \
+    MemoryStatus_s=string \
   --output none 2>/dev/null || true
 echo "  ✓ Custom log table AgentTelemetry_CL ready"
 
@@ -418,7 +516,12 @@ cat > /tmp/dcr_def.json << DCR_EOF
           {"name": "Faithfulness_d", "type": "real"},
           {"name": "AnswerRelevance_d", "type": "real"},
           {"name": "KeywordRecall_d", "type": "real"},
-          {"name": "CitationRecall_d", "type": "real"}
+          {"name": "CitationRecall_d", "type": "real"},
+          {"name": "MemoryEnabled_b", "type": "boolean"},
+          {"name": "MemoryReadCount_d", "type": "real"},
+          {"name": "MemoryWriteCount_d", "type": "real"},
+          {"name": "MemoryLatencyMs_d", "type": "real"},
+          {"name": "MemoryStatus_s", "type": "string"}
         ]
       }
     },

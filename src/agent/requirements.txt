@@ -1,8 +1,10 @@
 agent-framework-foundry
 agent-framework-foundry-hosting>=1.0.0a260630
+azure-ai-projects>=2.3.0
 debugpy
 azure-search-documents>=11.6.0
 azure-identity>=1.17.0
+aiohttp>=3.9.0
 scikit-learn>=1.4.0
 numpy>=1.26.0
 azure-monitor-ingestion>=1.0.0

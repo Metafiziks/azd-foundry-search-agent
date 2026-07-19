@@ -55,6 +55,17 @@ _RESPONSES_ENDPOINT_ENV  = os.environ.get("AGENT_SEARCH_AGENT_RESPONSES_ENDPOINT
 RESPONSES_API_VERSION     = "v1"
 
 EVAL_IS_BASELINE = os.environ.get("EVAL_IS_BASELINE", "false").lower() == "true"
+MEMORY_EVAL_ENABLED = (
+    os.environ.get("EVAL_MEMORY_ENABLED", "").lower() in {"1", "true", "yes", "on"}
+    or (
+        os.environ.get("EVAL_MEMORY_ENABLED") is None
+        and os.environ.get("MEMORY_ENABLED", "").lower() == "true"
+        and bool(os.environ.get("MEMORY_STORE_NAME"))
+    )
+)
+EVAL_MEMORY_USER_ID = os.environ.get("EVAL_MEMORY_USER_ID", f"eval-user-{os.environ.get('AZURE_ENV_NAME', 'local')}")
+EVAL_MEMORY_SESSION_ID = os.environ.get("EVAL_MEMORY_SESSION_ID", f"eval-session-{uuid.uuid4()}")
+EVAL_MEMORY_SETTLE_SECONDS = int(os.environ.get("EVAL_MEMORY_SETTLE_SECONDS", "20"))
 
 THRESHOLDS = {
     "faithfulness":     float(os.environ.get("THRESHOLD_FAITHFULNESS",    "0.60")),
@@ -158,7 +169,7 @@ def get_token(scope: str = "https://ai.azure.com") -> str:
     return tok.token
 
 
-def responses_post(payload: dict) -> dict:
+def responses_post(payload: dict, extra_headers: dict[str, str] | None = None) -> dict:
     """POST to the agent-specific Responses API endpoint."""
     import urllib.request, urllib.error
     # Prefer pre-built endpoint from azd; fall back to constructing from project endpoint
@@ -171,6 +182,8 @@ def responses_post(payload: dict) -> dict:
         req = urllib.request.Request(url, data=data, method="POST")
         req.add_header("Authorization", f"Bearer {token}")
         req.add_header("Content-Type", "application/json")
+        for name, value in (extra_headers or {}).items():
+            req.add_header(name, value)
         try:
             with urllib.request.urlopen(req, timeout=300) as resp:
                 result = json.loads(resp.read())
@@ -204,7 +217,7 @@ def responses_post(payload: dict) -> dict:
 # Agent caller
 # ---------------------------------------------------------------------------
 
-def call_agent(question: str) -> tuple[str, list[str], float]:
+def call_agent(question: str, extra_headers: dict[str, str] | None = None) -> tuple[str, list[str], float]:
     """
     Call the Foundry hosted agent with a question.
     Returns (answer_text, citation_filenames, latency_ms).
@@ -218,7 +231,7 @@ def call_agent(question: str) -> tuple[str, list[str], float]:
     }
 
     start = time.time()
-    result = responses_post(payload)
+    result = responses_post(payload, extra_headers=extra_headers)
     latency_ms = (time.time() - start) * 1000
 
     # Extract answer text from Responses API output
@@ -332,6 +345,19 @@ def fmt(v) -> str:
     return str(v)
 
 
+def is_memory_case(case: dict) -> bool:
+    return bool(case.get("memory")) or case.get("category") == "memory"
+
+
+def memory_headers(case_id: str) -> dict[str, str]:
+    user_id = os.environ.get(f"EVAL_MEMORY_USER_ID_{case_id.upper().replace('-', '_')}", EVAL_MEMORY_USER_ID)
+    return {
+        "x-agent-user-id": user_id,
+        "x-memory-user-id": user_id,
+        "x-memory-session-id": EVAL_MEMORY_SESSION_ID,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main eval loop
 # ---------------------------------------------------------------------------
@@ -340,12 +366,14 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
     results = []
     latencies = []
     skipped = 0
+    skipped_memory = 0
 
     print(f"Loaded {len(cases)} eval cases")
     print(f"Agent:    {FOUNDRY_PROJECT_ENDPOINT} (model={AGENT_NAME})")
     print(f"Judge:    {MODEL_DEPLOYMENT} via Foundry{' (skipped)' if not use_judge else ''}")
     print(f"Baseline: {EVAL_IS_BASELINE}")
     print(f"HHEM:     {'disabled' if os.environ.get('SKIP_HHEM') == 'true' else 'enabled'}")
+    print(f"Memory:   {'enabled' if MEMORY_EVAL_ENABLED else 'skipped'}")
     print()
 
     for i, case in enumerate(cases, 1):
@@ -356,20 +384,63 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
             time.sleep(inter_wait)
 
         cid   = case["id"]
-        q     = case["question"]
+        memory_case = is_memory_case(case)
+        q     = case.get("question") or case.get("turns", [{}])[-1].get("question", "")
         kws   = [kw.lower() for kw in case.get("expected_keywords", [])]
         srcs  = [s.lower() for s in case.get("expected_sources", [])]
 
         print(f"[{i:2d}/{len(cases)}] {cid} ...", end=" ", flush=True)
 
+        if memory_case and not MEMORY_EVAL_ENABLED:
+            print("SKIPPED (memory not configured)")
+            skipped_memory += 1
+            results.append({
+                "id": cid,
+                "question": q,
+                "answer": None,
+                "citations": [],
+                "keyword_recall": None,
+                "citation_recall": None,
+                "faithfulness": None,
+                "answer_relevance": None,
+                "hhem_score": None,
+                "latency_ms": None,
+                "memory": True,
+                "turns": [],
+                "skipped": True,
+                "error": None,
+            })
+            output_path.write_text(json.dumps({"results": results, "partial": True}, indent=2))
+            continue
+
         try:
-            answer, citations, latency_ms = call_agent(q)
+            turn_results = []
+            if case.get("turns"):
+                headers = memory_headers(cid) if memory_case else None
+                total_latency_ms = 0.0
+                answer = ""
+                citations = []
+                for turn_index, turn in enumerate(case["turns"]):
+                    answer, citations, turn_latency_ms = call_agent(turn["question"], extra_headers=headers)
+                    total_latency_ms += turn_latency_ms
+                    turn_results.append({
+                        "question": turn["question"],
+                        "answer": answer,
+                        "citations": citations,
+                        "latency_ms": turn_latency_ms,
+                    })
+                    if turn_index < len(case["turns"]) - 1:
+                        print(f"turn{turn_index + 1}={turn_latency_ms:.0f}ms wait={EVAL_MEMORY_SETTLE_SECONDS}s ", end="", flush=True)
+                        time.sleep(EVAL_MEMORY_SETTLE_SECONDS)
+                latency_ms = total_latency_ms
+            else:
+                answer, citations, latency_ms = call_agent(q)
             citations_lower = [c.lower() for c in citations]
 
             # Deterministic metrics
             kw_hits  = sum(1 for kw in kws if kw in answer.lower())
             kw_score = kw_hits / len(kws) if kws else 1.0
-            cite_hit = int(any(src in " ".join(citations_lower) for src in srcs))
+            cite_hit = int(any(src in " ".join(citations_lower) for src in srcs)) if srcs else 1
 
             # LLM judge
             if use_judge and answer:
@@ -412,6 +483,11 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
                 "AnswerRelevance":       answer_relevance,
                 "KeywordRecall":         kw_score,
                 "CitationRecall":        float(cite_hit),
+                "MemoryEnabled":         MEMORY_EVAL_ENABLED,
+                "MemoryReadCount":       None,
+                "MemoryWriteCount":      None,
+                "MemoryLatencyMs":       None,
+                "MemoryStatus":          "eval_memory_case" if memory_case else None,
                 "TimeGenerated":         datetime.now(timezone.utc).isoformat(),
             })
 
@@ -426,6 +502,9 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
                 "answer_relevance": answer_relevance,
                 "hhem_score": hhem_score,
                 "latency_ms": latency_ms,
+                "memory": memory_case,
+                "turns": turn_results,
+                "skipped": False,
                 "error": None,
             })
             # Incremental save so results survive an early stop
@@ -438,11 +517,12 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
                 "id": cid, "question": q, "answer": None, "citations": [],
                 "keyword_recall": None, "citation_recall": None,
                 "faithfulness": None, "answer_relevance": None,
-                "hhem_score": None, "latency_ms": None, "error": str(exc),
+                "hhem_score": None, "latency_ms": None,
+                "memory": memory_case, "turns": [], "skipped": False, "error": str(exc),
             })
 
     # Aggregate
-    valid = [r for r in results if r["error"] is None]
+    valid = [r for r in results if r["error"] is None and not r.get("skipped")]
     summary = {
         "keyword_recall":    sum(r["keyword_recall"] for r in valid) / len(valid) if valid else 0,
         "citation_recall":   sum(r["citation_recall"] for r in valid) / len(valid) if valid else 0,
@@ -451,10 +531,15 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
         "p95_latency_ms":    percentile(latencies, 95),
         "cases_total":       len(cases),
         "cases_error":       skipped,
+        "cases_skipped":     skipped_memory,
     }
 
+    threshold_keys = list(THRESHOLDS)
+    if not use_judge:
+        threshold_keys = [k for k in threshold_keys if k not in {"faithfulness", "answer_relevance"}]
     failures = [
-        k for k, t in THRESHOLDS.items()
+        k for k in threshold_keys
+        for t in [THRESHOLDS[k]]
         if (summary.get(k, 0) > t if k == "p95_latency_ms" else summary.get(k, 0) < t)
     ]
     passed   = len(failures) == 0
@@ -485,7 +570,7 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
     for k, label in metric_labels.items():
         score = summary.get(k, 0)
         thr   = THRESHOLDS[k]
-        ok    = "✅" if (score <= thr if k == "p95_latency_ms" else score >= thr) else "❌"
+        ok    = "—" if k not in threshold_keys else ("✅" if (score <= thr if k == "p95_latency_ms" else score >= thr) else "❌")
         val   = f"{score:.4f}" if k != "p95_latency_ms" else f"{score:.0f}"
         tval  = f"{thr:.4f}" if k != "p95_latency_ms" else f"{thr:.0f}"
         lines.append(f"| {label} | {val} | {tval} | {ok} |")
@@ -496,6 +581,8 @@ def run_evals(cases: list[dict], use_judge: bool, output_path: Path) -> dict:
     for r in results:
         if r["error"]:
             lines.append(f"| {r['id']} | ERR | ERR | ERR | ERR | — |")
+        elif r.get("skipped"):
+            lines.append(f"| {r['id']} | SKIP | SKIP | SKIP | SKIP | — |")
         else:
             f_  = f"{r['faithfulness']:.2f}"  if r["faithfulness"] is not None else "—"
             rv_ = f"{r['answer_relevance']:.2f}" if r["answer_relevance"] is not None else "—"

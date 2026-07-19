@@ -17,6 +17,7 @@ Output schema (matches tests/eval_cases.json):
   question         — a question a worker on the floor might actually ask
   expected_keywords — 4-6 key phrases that must appear in a correct answer
   expected_sources  — [filename.txt] used to score citation recall
+  turns             — optional multi-turn memory eval sequence
 """
 
 import argparse
@@ -41,6 +42,28 @@ MODEL_DEPLOYMENT          = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gp
 RESPONSES_API_VERSION     = "2025-04-01-preview"
 DOCS_DIR                  = Path(__file__).parent.parent / "docs"
 OUTPUT_PATH               = Path(__file__).parent.parent / "tests" / "eval_cases.json"
+
+MEMORY_EVAL_CASE = {
+    "id": "memory-preference-recall",
+    "category": "memory",
+    "memory": True,
+    "turns": [
+        {
+            "question": (
+                "Please remember this for future manufacturing support: my preferred "
+                "maintenance shift is second shift and my preferred unit label is Line 2."
+            )
+        },
+        {
+            "question": (
+                "For my future manufacturing support requests, which maintenance shift "
+                "and unit label should you use for me?"
+            )
+        },
+    ],
+    "expected_keywords": ["second shift", "Line 2"],
+    "expected_sources": [],
+}
 
 GENERATOR_PROMPT = """\
 You are writing test cases for a RAG evaluation suite.
@@ -217,6 +240,7 @@ def main():
         time.sleep(1)
 
     all_cases = deduplicate_ids(all_cases)
+    all_cases.append(MEMORY_EVAL_CASE)
     print(f"\nTotal: {len(all_cases)} eval cases")
 
     if args.dry_run:

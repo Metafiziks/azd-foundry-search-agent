@@ -1,5 +1,6 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+import asyncio
 import base64
 import json
 import logging
@@ -12,11 +13,13 @@ from agent_framework import Agent
 from agent_framework.foundry import FoundryChatClient
 from agent_framework_foundry_hosting import ResponsesHostServer
 from azure.identity import DefaultAzureCredential
+from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
 from azure.search.documents import SearchClient
 from azure.search.documents.models import QueryType
 
 import iforest_scorer
 import log_analytics_sink
+from memory_provider import build_memory_provider, memory_enabled_from_env
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,6 +27,10 @@ logger = logging.getLogger(__name__)
 INSTRUCTIONS = """
 You are a knowledgeable assistant that answers questions based on the organization's
 documents and procedures.
+
+You may also receive separate user/session memory context. Use memory only for
+stable user preferences, session continuity, or workflow context. AI Search
+document retrieval remains the source of truth for procedure and policy answers.
 
 **Answering style:**
 - Synthesize and summarize information in your own words — do not quote documents verbatim.
@@ -163,23 +170,34 @@ def search_knowledge_base(query: str) -> str:
     return "\n\n---\n\n".join(excerpts)
 
 
-def main():
-    client = FoundryChatClient(
-        project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
-        model=os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"],
-        credential=_credential,
-    )
+async def main() -> None:
+    async_credential = AsyncDefaultAzureCredential()
+    client_kwargs = {
+        "project_endpoint": os.environ["FOUNDRY_PROJECT_ENDPOINT"],
+        "model": os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"],
+        "credential": async_credential,
+    }
+    if memory_enabled_from_env():
+        client_kwargs["allow_preview"] = True
 
-    agent = Agent(
-        client=client,
-        instructions=INSTRUCTIONS,
-        tools=[search_knowledge_base],
-        default_options={"store": False},
-    )
+    client = FoundryChatClient(**client_kwargs)
+    memory_provider = build_memory_provider(client.project_client)
+    context_providers = [memory_provider] if memory_provider else []
+
+    agent_kwargs = {
+        "client": client,
+        "instructions": INSTRUCTIONS,
+        "tools": [search_knowledge_base],
+        "default_options": {"store": False},
+    }
+    if context_providers:
+        agent_kwargs["context_providers"] = context_providers
+
+    agent = Agent(**agent_kwargs)
 
     server = ResponsesHostServer(agent)
-    server.run()
+    await server.run_async()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
