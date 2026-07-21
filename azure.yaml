@@ -46,6 +46,8 @@ services:
               value: ${MEMORY_STORE_NAME}
             - name: MEMORY_SCOPE
               value: ${MEMORY_SCOPE}
+            - name: MEMORY_INCLUDE_STATIC_PROFILE
+              value: ${MEMORY_INCLUDE_STATIC_PROFILE}
             - name: MEMORY_UPDATE_DELAY_SECONDS
               value: ${MEMORY_UPDATE_DELAY_SECONDS}
         kind: hosted

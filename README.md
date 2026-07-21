@@ -45,7 +45,7 @@ Azure AI Search  ◄── indexes every 2 hours
 Azure Blob Storage  (docs/ container, public read)
 ```
 
-The agent runs entirely in Foundry's hosting infrastructure — no container registry or ACA environment to manage. Its managed identity is granted `Search Index Data Reader` for AI Search and `Cognitive Services OpenAI User` for memory store access automatically at deploy time.
+The agent runs entirely in Foundry's hosting infrastructure — no container registry or ACA environment to manage. Its managed identity is granted `Search Index Data Reader` for AI Search and Foundry Memory RBAC (`Foundry User` and `Cognitive Services OpenAI User`) automatically at deploy time.
 
 Memory is intentionally separate from document retrieval. Azure AI Search remains the source of truth for procedures and citations; Foundry Memory only supplies scoped continuity such as stable user preferences, session context, or workflow hints.
 
@@ -181,13 +181,15 @@ Or open the agent playground link printed at the end of `azd up`.
 
 ## Memory layer (preview)
 
-This template uses Azure AI Foundry Agent Service Memory Store when the current SDK/API and subscription support the preview. `postprovision.sh` deploys an embedding model, creates or reuses `MEMORY_STORE_NAME` through `azure-ai-projects>=2.3.0`, and sets the hosted-agent environment. At runtime, a context provider reads relevant memories before each model call and queues memory updates after the response.
+This template uses Azure AI Foundry Agent Service Memory Store when the current SDK/API and subscription support the preview. `postprovision.sh` deploys `text-embedding-3-small`, creates or reuses `MEMORY_STORE_NAME` through `azure-ai-projects>=2.3.0`, and sets the hosted-agent environment. At runtime, a context provider reads relevant memories before each model call and queues memory updates after the response.
 
 **Behavior and limits:**
 
 - Memory is optional by default because the service is in public preview. Set `MEMORY_OPTIONAL=false` to make provisioning/runtime failures fail fast.
 - Memory is scoped separately from RAG. Use it for user preferences and workflow continuity, not for authoritative procedure content.
 - The default scope is `{{$userId}}` for Foundry-hosted identity scoping. For local or single-tenant testing, set `MEMORY_SCOPE=user:{memory_user_id}` and `MEMORY_USER_ID=<stable-id>`. To force per-session isolation, set `MEMORY_SCOPE=session:{session_id}`.
+- Memory writes use the Memory Store update poller. With optional memory enabled, write completion is polled in a background task so response latency is not blocked; set `MEMORY_OPTIONAL=false` to await the poller and fail fast on write errors.
+- Provisioning grants `Foundry User` and `Cognitive Services OpenAI User` on the Foundry account/project to the hosted agent and project identities so Memory Store can read/write and run embedding operations.
 - Avoid storing sensitive personal data, secrets, credentials, financial data, or precise location data. The store is configured to favor stable manufacturing workflow preferences.
 
 Memory-specific telemetry is written to `AgentTelemetry_CL` with `MemoryEnabled`, `MemoryReadCount`, `MemoryWriteCount`, `MemoryLatencyMs`, and `MemoryStatus` fields when Log Analytics ingestion is configured.
