@@ -1,16 +1,40 @@
+import io
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
+from urllib.error import HTTPError
 
 import httpx
 
 from purview_host import NO_DOCUMENTS, build_protected_host
 from purview_search import ProtectedSearchError, PurviewSearch, TOKEN_HEADER
-from setup_purview_index import definitions
+from setup_purview_index import definitions, deploy_search
 
 LABEL = "12345678-4321-4321-4321-123456789abc"
 SCHEMA = definitions("protected", "/storage-id", "private-docs")[0][1]
+
+
+class ProtectedProvisioningTests(unittest.TestCase):
+    def test_managed_setup_retries_permission_propagation_and_resumes(self):
+        forbidden = HTTPError("https://example.test", 403, "Forbidden", {}, None)
+        with (
+            patch("setup_purview_index.request", side_effect=[forbidden, b""]) as request,
+            patch("setup_purview_index.time.sleep") as sleep,
+        ):
+            deploy_search("https://example.test", "app-token", SCHEMA, resume=True)
+        self.assertEqual(request.call_count, 2)
+        self.assertTrue(all(call.kwargs["create_only"] is False for call in request.call_args_list))
+        sleep.assert_called_once()
+
+    def test_standalone_setup_does_not_replace_an_existing_index(self):
+        conflict = HTTPError("https://example.test", 412, "Already exists", {}, io.BytesIO(b"existing index"))
+        with (
+            patch("setup_purview_index.request", side_effect=conflict) as request,
+            self.assertRaisesRegex(SystemExit, "HTTP 412: existing index"),
+        ):
+            deploy_search("https://example.test", "app-token", SCHEMA, resume=False)
+        request.assert_called_once_with("PUT", "https://example.test", "app-token", SCHEMA, create_only=True)
 
 
 class ProtectedRetrievalTests(unittest.IsolatedAsyncioTestCase):

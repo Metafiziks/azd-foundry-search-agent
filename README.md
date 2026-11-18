@@ -51,14 +51,14 @@ Memory is intentionally separate from document retrieval. Azure AI Search remain
 
 ## Prerequisites
 
-- [Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd) with the `azure.ai.agents` extension (`>= 1.0.0-beta.4`)
+- [Current Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd) with the `microsoft.foundry` extension (includes the Foundry Projects and Agents providers)
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
 - Azure subscription with **gpt-5 quota** in `eastus2` (or adjust `AZURE_LOCATION` and the model in postprovision)
 
 Install the azd extension if you haven't already:
 
 ```bash
-azd extension add azure.ai.agents
+azd extension install microsoft.foundry
 ```
 
 ## Quick start
@@ -176,38 +176,36 @@ user's document rights before returning excerpts. The agent requires delegated
 authorization, excludes unlabeled documents, and never retries against the
 sample index or uses the model to make access decisions.
 
-1. Prepare a dedicated, same-tenant Azure AI Search service with RBAC, semantic
-   ranking, and a system-assigned managed identity. Give that identity **Storage
-   Blob Data Reader** on the source container. Have a tenant administrator
-   approve and assign the [Purview extraction roles][purview-index] to the
-   **Search identity**, not the agent identity.
-2. Apply your existing Purview labels to supported files **before** uploading
-   them. Use labels whose rights grant extraction only to the intended users
-   or groups; a label that only marks a document does not restrict its audience.
-   Upload to a private Blob container outside this repository. Disable anonymous
-   Blob access and versioning, and enable Blob soft delete before indexing.
-3. As a **Search Service Contributor** with read access to Storage account
-   settings, create a **new index**. Purview cannot be added to an existing index.
-   The helper uses Azure CLI authentication and does not upload documents or
-   overwrite existing Search resources:
+1. Use a fresh azd environment in the Purview tenant. Sign in to `az` and
+   `azd` with the same deployment identity, which needs permission to create
+   resources and assign Azure RBAC roles in the environment. If you have
+   subscriptions in multiple tenants, sign in explicitly to the target tenant.
 
    ```bash
-   python3 scripts/setup_purview_index.py \
-     --search-service <search-service> --index <new-protected-index> \
-     --storage-resource-id <storage-account-resource-id> --container <private-container>
+   az login --tenant <tenant-id>
+   azd auth login --tenant-id <tenant-id>
+   azd env new <unique-environment> --subscription <subscription-id> --location eastus2
    azd env set KB_ACCESS_MODE purview
-   azd env set PURVIEW_SEARCH_ENDPOINT https://<search-service>.search.windows.net
-   azd env set PURVIEW_SEARCH_INDEX <new-protected-index>
-   azd up
+   azd up --no-prompt
    ```
 
-4. Give the hosted agent's managed identity **Search Index Data Reader** on
-   that index plus the
-   [`Microsoft.Search/searchServices/indexes/read` action][search-roles] on the
-   Search service through a custom role so it can verify the index is
-   Purview-enabled. Do not give the agent key access or elevated read. Check the
-   first indexer run for errors and verify a known labeled file before routing
-   users to the agent.
+   The hooks create dedicated Search and Storage resources in the environment's
+   resource group. Search uses its system-assigned identity and RBAC, not API
+   keys. The `docs` Blob container has no anonymous or shared-key access; Blob
+   soft delete is enabled. The hook configures a new Purview-enabled index and
+   Blob indexer; it never uploads the sample corpus. Post-deploy assigns the
+   agent [Reader and index-scoped Search Index Data Reader][search-roles], not
+   elevated read.
+2. Have a tenant administrator approve and assign the
+   [Purview extraction roles][purview-index] to the **Search identity** printed
+   by the provision hook, not to the agent. `azd` cannot grant those tenant
+   permissions. If Purview rejects index provisioning before the grant, rerun
+   `azd up` in the same environment after approval.
+3. Apply Purview labels to supported files **before** uploading them with Entra
+   authentication to the private `docs` container. Use a label whose rights grant
+   extraction only to the intended users or groups; a label that only marks a
+   document does not restrict its audience. Check the indexer run and verify a
+   known labeled file before routing any user traffic.
 
 **Connect the existing company app.** Its trusted backend exchanges the
 user's validated Entra token [on behalf of the user][foundry-obo] for a token
@@ -245,6 +243,11 @@ evals. Do not configure content recording for protected requests or put
 restricted files in `docs/`, even in protected mode. If using the optional
 sample GitHub workflows, set repository variable `KB_ACCESS_MODE=purview` to
 disable their deployment and scheduled-eval jobs for this environment.
+
+After a test, run `azd down --force --purge --no-prompt` in that environment
+and verify its resource group is gone. Check any separately created tenant
+test users, labels, or app registrations with the tenant administrator; `azd
+down` does not manage those directory objects.
 
 [purview-index]: https://learn.microsoft.com/azure/search/search-indexer-sensitivity-labels
 [purview-query]: https://learn.microsoft.com/azure/search/search-query-sensitivity-labels
