@@ -151,6 +151,9 @@ Required variables:
 
 ## Bring your own documents
 
+The default `sample` mode uses publicly readable Blob citation URLs. Use it only
+for public documents. For an internal knowledge base, use the protected mode below.
+
 1. Replace the files in `docs/` with your own content. Subdirectory structure is preserved as metadata (e.g., `docs/safety/`, `docs/hr/`, `docs/legal/`).
 2. Supported formats: `.txt`, `.pdf`, `.docx`, `.md`
 3. Re-run `azd up` to re-index and redeploy.
@@ -164,6 +167,89 @@ You are a knowledgeable assistant that answers questions based on
 ...
 """
 ```
+
+## Protect documents with Microsoft Purview
+
+Set `KB_ACCESS_MODE=purview` to use **existing Microsoft Purview sensitivity
+labels** with Azure AI Search (public preview). Search evaluates the signed-in
+user's document rights before returning excerpts. The agent requires delegated
+authorization, excludes unlabeled documents, and never retries against the
+sample index or uses the model to make access decisions.
+
+1. Prepare a dedicated, same-tenant Azure AI Search service with RBAC, semantic
+   ranking, and a system-assigned managed identity. Give that identity **Storage
+   Blob Data Reader** on the source container. Have a tenant administrator
+   approve and assign the [Purview extraction roles][purview-index] to the
+   **Search identity**, not the agent identity.
+2. Apply your existing Purview labels to supported files **before** uploading
+   them. Use labels whose rights grant extraction only to the intended users
+   or groups; a label that only marks a document does not restrict its audience.
+   Upload to a private Blob container outside this repository. Disable anonymous
+   Blob access and versioning, and enable Blob soft delete before indexing.
+3. As a **Search Service Contributor** with read access to Storage account
+   settings, create a **new index**. Purview cannot be added to an existing index.
+   The helper uses Azure CLI authentication and does not upload documents or
+   overwrite existing Search resources:
+
+   ```bash
+   python3 scripts/setup_purview_index.py \
+     --search-service <search-service> --index <new-protected-index> \
+     --storage-resource-id <storage-account-resource-id> --container <private-container>
+   azd env set KB_ACCESS_MODE purview
+   azd env set PURVIEW_SEARCH_ENDPOINT https://<search-service>.search.windows.net
+   azd env set PURVIEW_SEARCH_INDEX <new-protected-index>
+   azd up
+   ```
+
+4. Give the hosted agent's managed identity **Search Index Data Reader** on
+   that index plus the
+   [`Microsoft.Search/searchServices/indexes/read` action][search-roles] on the
+   Search service through a custom role so it can verify the index is
+   Purview-enabled. Do not give the agent key access or elevated read. Check the
+   first indexer run for errors and verify a known labeled file before routing
+   users to the agent.
+
+**Connect the existing company app.** Its trusted backend exchanges the
+user's validated Entra token [on behalf of the user][foundry-obo] for a token
+with scope `https://search.azure.com/.default`. The backend calls the Foundry
+Responses endpoint with these headers:
+
+| Header | Value |
+|---|---|
+| `Authorization` | `Bearer <backend Foundry workload token>` |
+| `x-ms-user-identity` | Object ID of the signed-in user from the backend's validated identity |
+| `x-client-search-access-token` | Raw delegated Search access token for that same user, without `Bearer` |
+
+Use Foundry Agent Consumer and the `UserIdentityImpersonation/action`
+permission for the backend workload. Limit invocation of the protected
+agent to trusted backend identities. Don't accept user IDs or Search tokens
+from browser-supplied headers, and don't log or trace them. Send
+`{"input":"<question>","store":false,"background":false}` with no conversation
+or previous response. The backend should check the HTTP and Responses
+statuses, and must not cache protected results or replay previous answers into
+later requests. The agent returns source filenames, not Blob URLs.
+
+**Verify before rollout.** Ask the same question as an authorized employee and
+an employee outside the approved group. Include a known unlabeled file and test
+an omitted or expired delegated token. The authorized user should see the
+restricted answer; the other user and unlabeled file should not. Missing or
+invalid tokens should fail rather than return content. Verify that Blob files
+are not downloadable anonymously. Source relabeling and soft deletes only take
+effect in Search after a successful indexer run (every two hours by default).
+For an urgent removal, take the affected index or endpoint out of service until
+the updated results are verified. See [query-time limitations][purview-query],
+including same-tenant users only.
+
+Protected mode skips sample ingestion, Memory Store, and automated sample
+evals. Do not configure content recording for protected requests or put
+restricted files in `docs/`, even in protected mode. If using the optional
+sample GitHub workflows, set repository variable `KB_ACCESS_MODE=purview` to
+disable their deployment and scheduled-eval jobs for this environment.
+
+[purview-index]: https://learn.microsoft.com/azure/search/search-indexer-sensitivity-labels
+[purview-query]: https://learn.microsoft.com/azure/search/search-query-sensitivity-labels
+[search-roles]: https://learn.microsoft.com/azure/search/search-security-rbac
+[foundry-obo]: https://learn.microsoft.com/azure/foundry/agents/how-to/use-on-behalf-of-flow
 
 ## Test the agent
 

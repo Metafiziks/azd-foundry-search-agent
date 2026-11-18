@@ -175,6 +175,35 @@ def search_knowledge_base(query: str) -> str:
 
 
 async def main() -> None:
+    access_mode = os.environ.get("KB_ACCESS_MODE") or "sample"
+    if access_mode not in {"sample", "purview"}:
+        raise ValueError("KB_ACCESS_MODE must be 'sample' or 'purview'")
+    if access_mode == "sample" and (os.environ.get("PURVIEW_SEARCH_ENDPOINT") or os.environ.get("PURVIEW_SEARCH_INDEX")):
+        raise ValueError("Protected Search settings require KB_ACCESS_MODE=purview")
+    if access_mode == "purview":
+        import httpx
+        from azure.identity.aio import ManagedIdentityCredential
+
+        from purview_host import INSTRUCTIONS as protected_instructions, build_protected_host
+        from purview_search import PurviewSearch
+
+        async with (
+            AsyncDefaultAzureCredential() as model_credential,
+            ManagedIdentityCredential() as search_credential,
+            httpx.AsyncClient(timeout=30, trust_env=False) as http,
+        ):
+            client = FoundryChatClient(
+                project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
+                model=os.environ["AZURE_AI_MODEL_DEPLOYMENT_NAME"],
+                credential=model_credential,
+            )
+            agent = Agent(client=client, instructions=protected_instructions, default_options={"store": False})
+            search = PurviewSearch(
+                os.environ["PURVIEW_SEARCH_ENDPOINT"], os.environ["PURVIEW_SEARCH_INDEX"], search_credential, http
+            )
+            await build_protected_host(agent, search).run_async()
+        return
+
     async_credential = AsyncDefaultAzureCredential()
     client_kwargs = {
         "project_endpoint": os.environ["FOUNDRY_PROJECT_ENDPOINT"],

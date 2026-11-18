@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   evals:
+    if: vars.KB_ACCESS_MODE != 'purview'
     runs-on: ubuntu-latest
 
     env:
