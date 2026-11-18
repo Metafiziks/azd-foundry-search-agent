@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-case "${KB_ACCESS_MODE:-sample}" in
-  purview)
-    echo "Purview mode: configure the protected Search RBAC and validate with delegated users; sample evals skipped."
-    exit 0
-    ;;
+KB_ACCESS_MODE="${KB_ACCESS_MODE:-sample}"
+case "$KB_ACCESS_MODE" in
+  purview) az() { command az "$@" --subscription "$AZURE_SUBSCRIPTION_ID"; } ;;
   sample) ;;
   *) echo "KB_ACCESS_MODE must be 'sample' or 'purview'." >&2; exit 1 ;;
 esac
@@ -20,6 +18,10 @@ SAFE=$(echo "$AZURE_ENV_NAME" | tr -cs '[:alnum:]' '-' | tr '[:upper:]' '[:lower
 SAFE="${SAFE%-}"
 
 if [ -z "$SEARCH_RESOURCE_ID" ] || [ -z "$RG" ]; then
+  if [ "$KB_ACCESS_MODE" = "purview" ]; then
+    echo "Protected Search resource ID or resource group missing. Run azd up again." >&2
+    exit 1
+  fi
   echo "⚠  Required environment variables not set. Re-run 'azd provision' first."
   exit 0
 fi
@@ -31,9 +33,32 @@ echo "► Locating agent hosting identity..."
 
 COG_ACCOUNT=$(az cognitiveservices account list   --resource-group "$RG"   --query "[0].name" -o tsv 2>/dev/null || true)
 
+AGENT_IDENTITY_NAME="${COG_ACCOUNT}-${AZURE_ENV_NAME}-search-agent-AgentIdentity"
+
+if [ "$KB_ACCESS_MODE" = "purview" ]; then
+  : "${PURVIEW_SEARCH_INDEX:?Run azd provision to create the protected index}"
+  : "${COG_ACCOUNT:?Could not find the deployed Foundry account}"
+  echo "  Looking for: ${AGENT_IDENTITY_NAME}"
+  for attempt in 1 2 3 4 5 6; do
+    HOSTING_OID=$(az ad sp list --display-name "$AGENT_IDENTITY_NAME" \
+      --query "[?displayName=='${AGENT_IDENTITY_NAME}'].id" -o tsv)
+    if [ -n "$HOSTING_OID" ]; then break; fi
+    if [ "$attempt" -lt 6 ]; then sleep 10; fi
+  done
+  if ! [[ "$HOSTING_OID" =~ ^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$ ]]; then
+    echo "Expected exactly one hosted agent identity for protected Search." >&2
+    exit 1
+  fi
+  az role assignment create --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
+    --role "Reader" --scope "$SEARCH_RESOURCE_ID" --output none
+  az role assignment create --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
+    --role "Search Index Data Reader" --scope "${SEARCH_RESOURCE_ID}/indexes/${PURVIEW_SEARCH_INDEX}" --output none
+  echo "Protected Search RBAC granted. Run the approved/denied test through the signed-in app after loading labeled fixtures."
+  exit 0
+fi
+
 HOSTING_OID=""
 if [ -n "$COG_ACCOUNT" ]; then
-  AGENT_IDENTITY_NAME="${COG_ACCOUNT}-${AZURE_ENV_NAME}-search-agent-AgentIdentity"
   echo "  Looking for: ${AGENT_IDENTITY_NAME}"
   HOSTING_OID=$(az ad sp list     --display-name "$AGENT_IDENTITY_NAME"     --query "[0].id" -o tsv 2>/dev/null || true)
 fi
@@ -124,7 +149,7 @@ VENV_EVAL="${HOME}/.azd-eval-venv"
 [ -f "${VENV_EVAL}/bin/python3" ] || python3 -m venv "${VENV_EVAL}"
 "${VENV_EVAL}/bin/pip" install azure-identity -q
 
-eval "$(azd env get-values 2>/dev/null)" || true
+# azd supplies environment values to this hook; the eval scripts use them directly.
 
 FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
 AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-}" \

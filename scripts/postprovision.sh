@@ -18,8 +18,10 @@ INDEX_NAME="${SAFE}-index"
 KB_ACCESS_MODE="${KB_ACCESS_MODE:-sample}"
 case "$KB_ACCESS_MODE" in
   purview)
-    : "${PURVIEW_SEARCH_ENDPOINT:?Set the protected Search endpoint in azd first}"
-    : "${PURVIEW_SEARCH_INDEX:?Set the protected Search index in azd first}"
+    SEARCH_NAME="${SAFE}-purview-search"
+    STORAGE_NAME="${STORAGE_NAME%docs}pdoc"
+    INDEX_NAME="${SAFE}-purview"
+    az() { command az "$@" --subscription "$AZURE_SUBSCRIPTION_ID"; }
     ;;
   sample)
     if [ -n "${PURVIEW_SEARCH_ENDPOINT:-}${PURVIEW_SEARCH_INDEX:-}" ]; then
@@ -90,12 +92,18 @@ else
   fi
 fi
 azd env set AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME "$EMBEDDING_DEPLOYMENT"
+fi
 
 # --- AI Search service ---
 echo ""
 echo "► Creating AI Search service: ${SEARCH_NAME}..."
 EXISTING_SEARCH=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" --query name -o tsv 2>/dev/null || true)
 SEARCH_ENDPOINT="https://${SEARCH_NAME}.search.windows.net"
+if [ "$KB_ACCESS_MODE" = "purview" ]; then
+  SEARCH_AUTH=(--disable-local-auth true --identity-type SystemAssigned)
+else
+  SEARCH_AUTH=(--auth-options aadOrApiKey --aad-auth-failure-mode http401WithBearerChallenge)
+fi
 
 if [ "$EXISTING_SEARCH" = "$SEARCH_NAME" ]; then
   echo "  (already exists)"
@@ -110,8 +118,7 @@ else
         --resource-group "$RG" \
         --location "$REGION" \
         --sku Standard \
-        --auth-options aadOrApiKey \
-        --aad-auth-failure-mode http401WithBearerChallenge \
+        "${SEARCH_AUTH[@]}" \
         --output none 2>/tmp/search_create_err; then
         SEARCH_CREATED=true
         echo "  ✓ Search service created in ${REGION}"
@@ -161,6 +168,63 @@ fi
 echo "  ✓ Search service ready"
 
 SEARCH_RESOURCE_ID=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" --query id -o tsv)
+
+if [ "$KB_ACCESS_MODE" = "purview" ]; then
+  SEARCH_PRINCIPAL=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" \
+    --query "identity.principalId" -o tsv)
+  SEARCH_KEYS_DISABLED=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" \
+    --query disableLocalAuth -o tsv)
+  if [ -z "$SEARCH_PRINCIPAL" ] || [ "$SEARCH_KEYS_DISABLED" != "true" ]; then
+    echo "Purview Search requires a system-assigned identity and disabled API keys." >&2
+    exit 1
+  fi
+
+  if ! az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --output none 2>/dev/null; then
+    az storage account create --name "$STORAGE_NAME" --resource-group "$RG" --location "$LOCATION" \
+      --sku Standard_LRS --kind StorageV2 --allow-blob-public-access false --allow-shared-key-access false \
+      --output none
+  fi
+  STORAGE_RESOURCE_ID=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
+  STORAGE_PRIVATE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" \
+    --query 'allowBlobPublicAccess == `false` && allowSharedKeyAccess == `false`' -o tsv)
+  if [ "$STORAGE_PRIVATE" != "true" ]; then
+    echo "Purview Storage requires both anonymous access and shared keys to be disabled." >&2
+    exit 1
+  fi
+  az storage account blob-service-properties update --account-name "$STORAGE_NAME" --resource-group "$RG" \
+    --enable-delete-retention true --delete-retention-days 7 --enable-versioning false --output none
+  az storage container-rm create --name docs --storage-account "$STORAGE_NAME" --resource-group "$RG" \
+    --public-access off --output none
+  az role assignment create --assignee-object-id "$SEARCH_PRINCIPAL" --assignee-principal-type ServicePrincipal \
+    --role "Storage Blob Data Reader" --scope "${STORAGE_RESOURCE_ID}/blobServices/default/containers/docs" --output none
+
+  azd env set PURVIEW_SEARCH_ENDPOINT "$SEARCH_ENDPOINT"
+  azd env set PURVIEW_SEARCH_INDEX "$INDEX_NAME"
+  azd env set AZURE_SEARCH_RESOURCE_ID "$SEARCH_RESOURCE_ID"
+  azd env set PURVIEW_STORAGE_ACCOUNT "$STORAGE_NAME"
+  echo "Purview Search identity for tenant admin approval: $SEARCH_PRINCIPAL"
+
+  PRINCIPAL_TYPE=$(az account show --query user.type -o tsv)
+  case "$PRINCIPAL_TYPE" in
+    user)
+      PROVISIONER_OID=$(az ad signed-in-user show --query id -o tsv)
+      PROVISIONER_TYPE=User
+      ;;
+    servicePrincipal)
+      PROVISIONER_APP=$(az account show --query user.name -o tsv)
+      PROVISIONER_OID=$(az ad sp show --id "$PROVISIONER_APP" --query id -o tsv)
+      PROVISIONER_TYPE=ServicePrincipal
+      ;;
+    *) echo "Unsupported Purview provisioner identity type: $PRINCIPAL_TYPE" >&2; exit 1 ;;
+  esac
+  : "${PROVISIONER_OID:?Could not resolve the Purview provisioner identity}"
+  az role assignment create --assignee-object-id "$PROVISIONER_OID" \
+    --assignee-principal-type "$PROVISIONER_TYPE" --role "Search Service Contributor" \
+    --scope "$SEARCH_RESOURCE_ID" --output none
+  python3 "$(dirname "$0")/setup_purview_index.py" \
+    --search-service "$SEARCH_NAME" --index "$INDEX_NAME" --storage-resource-id "$STORAGE_RESOURCE_ID" \
+    --container docs --resume
+else
 SEARCH_KEY=$(az search admin-key show --service-name "$SEARCH_NAME" --resource-group "$RG" --query primaryKey -o tsv)
 
 # --- Storage account ---
@@ -293,7 +357,7 @@ import subprocess, sys, time, urllib.request, urllib.error, json as _json
 
 def get_token():
     r = subprocess.run(
-        ["az", "account", "get-access-token",
+        ["az", "account", "get-access-token", "--subscription", sub_id,
          "--resource", "https://ai.azure.com",
          "--query", "accessToken", "-o", "tsv"],
         capture_output=True, text=True
@@ -385,7 +449,7 @@ WAIT_EOF
 echo ""
 
 if [ "$KB_ACCESS_MODE" = "purview" ]; then
-  echo "Purview mode: using the separately provisioned protected index; sample ingestion and memory provisioning skipped."
+  echo "Purview mode: private Storage and protected Search provisioned; sample upload and memory skipped."
   exit 0
 fi
 

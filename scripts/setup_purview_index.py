@@ -5,13 +5,33 @@ import argparse
 import json
 import re
 import subprocess
+import time
+import urllib.error
+import urllib.request
 
 
-def az_rest(method, url, resource, body=None):
-    command = ["az", "rest", "--method", method, "--url", url, "--resource", resource]
-    if body is not None:
-        command += ["--headers", "If-None-Match=*", "--body", json.dumps(body)]
-    return subprocess.check_output(command, text=True)
+def request(method, url, token, body=None, create_only=False):
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    if create_only:
+        headers["If-None-Match"] = "*"
+    payload = json.dumps(body).encode() if body is not None else None
+    with urllib.request.urlopen(urllib.request.Request(url, data=payload, headers=headers, method=method),
+                               timeout=30) as response:
+        return response.read()
+
+
+def deploy_search(url, token, body, resume):
+    # A new Search Service Contributor assignment can take several minutes to propagate.
+    for attempt in range(13):
+        try:
+            request("PUT", url, token, body, create_only=not resume)
+            return
+        except urllib.error.HTTPError as error:
+            if not resume or error.code not in (401, 403) or attempt == 12:
+                details = error.read().decode(errors="replace")[:2000]
+                raise SystemExit(f"Search configuration failed: HTTP {error.code}: {details}") from None
+            print(f"Waiting for Search RBAC (HTTP {error.code})...", flush=True)
+            time.sleep(20)
 
 
 def definitions(index, storage_id, container):
@@ -74,6 +94,7 @@ def main():
     parser.add_argument("--index", required=True, help="Name for a new index (up to 100 characters)")
     parser.add_argument("--storage-resource-id", required=True)
     parser.add_argument("--container", required=True)
+    parser.add_argument("--resume", action="store_true", help="Update the dedicated, azd-managed Search objects")
     args = parser.parse_args()
     storage_id = args.storage_resource_id.rstrip("/")
     if not re.fullmatch(r"/subscriptions/[a-fA-F0-9-]+/resourceGroups/[^/?#]+/providers/"
@@ -86,10 +107,19 @@ def main():
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", args.container):
         parser.error("--container must be a named Azure Blob container")
 
+    subscription = storage_id.split("/")[2]
+
+    def token(resource):
+        return subprocess.check_output(
+            ["az", "account", "get-access-token", "--subscription", subscription, "--resource", resource,
+             "--query", "accessToken", "-o", "tsv"], text=True
+        ).strip()
+
     arm = "https://management.azure.com"
+    arm_token = token(arm)
     storage_url = f"{arm}{storage_id}"
-    account = json.loads(az_rest("get", f"{storage_url}?api-version=2023-05-01", arm))
-    blob = json.loads(az_rest("get", f"{storage_url}/blobServices/default?api-version=2023-05-01", arm))
+    account = json.loads(request("GET", f"{storage_url}?api-version=2023-05-01", arm_token))
+    blob = json.loads(request("GET", f"{storage_url}/blobServices/default?api-version=2023-05-01", arm_token))
     if account["properties"].get("allowBlobPublicAccess") is not False:
         parser.error("Use a storage account with anonymous Blob access explicitly disabled")
     if not blob["properties"].get("deleteRetentionPolicy", {}).get("enabled"):
@@ -98,10 +128,11 @@ def main():
         parser.error("Native Search deletion detection requires Blob versioning to be disabled")
 
     endpoint = f"https://{args.search_service}.search.windows.net"
+    search_token = token("https://search.azure.com")
     for collection, body in definitions(args.index, storage_id, args.container):
         url = f"{endpoint}/{collection}/{body['name']}?api-version=2026-11-01-preview"
-        az_rest("put", url, "https://search.azure.com", body)
-        print(f"Created {collection}/{body['name']}", flush=True)
+        deploy_search(url, search_token, body, args.resume)
+        print(f"Configured {collection}/{body['name']}", flush=True)
     print("Verify the initial indexer execution and labeled documents before sending user traffic.")
 
 
