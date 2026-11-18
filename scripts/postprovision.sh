@@ -15,6 +15,23 @@ SAFE="${SAFE%-}"
 SEARCH_NAME="${SAFE}-search"
 STORAGE_NAME=$(echo "$AZURE_ENV_NAME" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]' | cut -c1-20)docs
 INDEX_NAME="${SAFE}-index"
+KB_ACCESS_MODE="${KB_ACCESS_MODE:-sample}"
+case "$KB_ACCESS_MODE" in
+  purview)
+    : "${PURVIEW_SEARCH_ENDPOINT:?Set the protected Search endpoint in azd first}"
+    : "${PURVIEW_SEARCH_INDEX:?Set the protected Search index in azd first}"
+    ;;
+  sample)
+    if [ -n "${PURVIEW_SEARCH_ENDPOINT:-}${PURVIEW_SEARCH_INDEX:-}" ]; then
+      echo "Protected Search settings require KB_ACCESS_MODE=purview." >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "KB_ACCESS_MODE must be 'sample' or 'purview'." >&2
+    exit 1
+    ;;
+esac
 
 # --- Model deployment ---
 echo "► Checking model deployment..."
@@ -42,6 +59,7 @@ fi
 azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "gpt-5"
 AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-5"
 
+if [ "$KB_ACCESS_MODE" = "sample" ]; then
 echo "► Checking embedding deployment for Foundry Memory..."
 EMBEDDING_DEPLOYMENT="${AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME:-text-embedding-3-small}"
 if az cognitiveservices account deployment show \
@@ -262,6 +280,7 @@ python3 "$(dirname "$0")/search_setup.py" \
 azd env set AZURE_SEARCH_ENDPOINT "$SEARCH_ENDPOINT"
 azd env set AZURE_SEARCH_INDEX "$INDEX_NAME"
 azd env set AZURE_SEARCH_RESOURCE_ID "$SEARCH_RESOURCE_ID"
+fi
 
 echo ""
 # --- Register Foundry project with data plane and wait for readiness ---
@@ -364,6 +383,11 @@ print("     Run 'azd deploy' again in 30-60 min. This is an Azure platform delay
 print("     Tip: visiting ai.azure.com and clicking your project may accelerate initialization.")
 WAIT_EOF
 echo ""
+
+if [ "$KB_ACCESS_MODE" = "purview" ]; then
+  echo "Purview mode: using the separately provisioned protected index; sample ingestion and memory provisioning skipped."
+  exit 0
+fi
 
 # --- Azure AI Foundry Memory Store (preview) ---
 echo "► Setting up Azure AI Foundry Memory Store..."

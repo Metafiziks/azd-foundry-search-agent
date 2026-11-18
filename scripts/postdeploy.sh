@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${KB_ACCESS_MODE:-sample}" in
+  purview)
+    echo "Purview mode: configure the protected Search RBAC and validate with delegated users; sample evals skipped."
+    exit 0
+    ;;
+  sample) ;;
+  *) echo "KB_ACCESS_MODE must be 'sample' or 'purview'." >&2; exit 1 ;;
+esac
+
 echo ""
 echo "=== Post-Deploy: Granting search permissions to agent ==="
 echo ""
