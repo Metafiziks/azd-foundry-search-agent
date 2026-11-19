@@ -37,29 +37,40 @@ esac
 
 # --- Model deployment ---
 echo "► Checking model deployment..."
-MODEL_COUNT=$(az cognitiveservices account deployment list \
-  --name "$ACCOUNT" --resource-group "$RG" \
-  --query "length(@)" -o tsv 2>/dev/null || echo "0")
+MODEL_NAME="${AZURE_AI_MODEL_NAME:-gpt-5}"
+MODEL_VERSION="${AZURE_AI_MODEL_VERSION:-2025-08-07}"
+MODEL_CAPACITY="${AZURE_AI_MODEL_CAPACITY:-10}"
+AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-$MODEL_NAME}"
+DEPLOYMENTS=$(az cognitiveservices account deployment list \
+  --name "$ACCOUNT" --resource-group "$RG" --output json)
+EXISTING_MODEL=$(python3 -c 'import json, sys
+for deployment in json.load(sys.stdin):
+    if deployment["name"] == sys.argv[1]:
+        print(deployment["properties"]["model"]["name"])
+        break
+' "$AZURE_AI_MODEL_DEPLOYMENT_NAME" <<< "$DEPLOYMENTS")
 
-if [ "$MODEL_COUNT" = "0" ]; then
-  echo "  Deploying gpt-5 model (this takes 2-3 minutes)..."
+if [ -z "$EXISTING_MODEL" ]; then
+  echo "  Deploying $MODEL_NAME model (this takes 2-3 minutes)..."
   az cognitiveservices account deployment create \
     --name "$ACCOUNT" \
     --resource-group "$RG" \
-    --deployment-name "gpt-5" \
-    --model-name "gpt-5" \
-    --model-version "2025-08-07" \
+    --deployment-name "$AZURE_AI_MODEL_DEPLOYMENT_NAME" \
+    --model-name "$MODEL_NAME" \
+    --model-version "$MODEL_VERSION" \
     --model-format "OpenAI" \
     --sku-name "GlobalStandard" \
-    --sku-capacity 10 \
+    --sku-capacity "$MODEL_CAPACITY" \
     --output none
-  echo "  ✓ Model deployed: gpt-5"
+  echo "  ✓ Model deployed: $AZURE_AI_MODEL_DEPLOYMENT_NAME"
+elif [ "$EXISTING_MODEL" != "$MODEL_NAME" ]; then
+  echo "Deployment $AZURE_AI_MODEL_DEPLOYMENT_NAME already uses $EXISTING_MODEL, not $MODEL_NAME." >&2
+  exit 1
 else
-  echo "  ✓ Model already deployed"
+  echo "  ✓ Model already deployed: $AZURE_AI_MODEL_DEPLOYMENT_NAME"
 fi
 
-azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "gpt-5"
-AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-5"
+azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "$AZURE_AI_MODEL_DEPLOYMENT_NAME"
 
 if [ "$KB_ACCESS_MODE" = "sample" ]; then
 echo "► Checking embedding deployment for Foundry Memory..."
@@ -207,12 +218,17 @@ if [ "$KB_ACCESS_MODE" = "purview" ]; then
   PRINCIPAL_TYPE=$(az account show --query user.type -o tsv)
   case "$PRINCIPAL_TYPE" in
     user)
-      PROVISIONER_OID=$(az ad signed-in-user show --query id -o tsv)
+      PROVISIONER_OID=$(az rest --url 'https://graph.microsoft.com/v1.0/me?$select=id' --query id -o tsv)
       PROVISIONER_TYPE=User
       ;;
     servicePrincipal)
       PROVISIONER_APP=$(az account show --query user.name -o tsv)
-      PROVISIONER_OID=$(az ad sp show --id "$PROVISIONER_APP" --query id -o tsv)
+      if ! [[ "$PROVISIONER_APP" =~ ^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$ ]]; then
+        echo "Expected an application ID for the Purview provisioner." >&2
+        exit 1
+      fi
+      PROVISIONER_OID=$(az rest --url "https://graph.microsoft.com/v1.0/servicePrincipals(appId='$PROVISIONER_APP')?\$select=id" \
+        --query id -o tsv)
       PROVISIONER_TYPE=ServicePrincipal
       ;;
     *) echo "Unsupported Purview provisioner identity type: $PRINCIPAL_TYPE" >&2; exit 1 ;;

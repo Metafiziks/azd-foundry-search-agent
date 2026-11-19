@@ -1,5 +1,9 @@
 import io
 import json
+import os
+from pathlib import Path
+import subprocess
+from tempfile import TemporaryDirectory
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -16,6 +20,50 @@ SCHEMA = definitions("protected", "/storage-id", "private-docs")[0][1]
 
 
 class ProtectedProvisioningTests(unittest.TestCase):
+    def test_explicit_model_is_deployed_even_if_other_models_exist(self):
+        root = Path(__file__).resolve().parents[1]
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            for name, script in {
+                "az": """#!/usr/bin/env bash
+case "$*" in
+    "cognitiveservices account deployment list "*)
+        printf '%s\\n' '[{"name":"unrelated-model","properties":{"model":{"name":"unrelated-model"}}}]'
+        ;;
+    "cognitiveservices account deployment create "*)
+        printf '%s\\n' "$*"
+        ;;
+    *) exit 98 ;;
+esac
+""",
+                "azd": """#!/usr/bin/env bash
+printf '%s\\n' "$*"
+exit 99
+""",
+            }.items():
+                command = path / name
+                command.write_text(script)
+                command.chmod(0o700)
+            result = subprocess.run(
+                ["bash", str(root / "scripts/postprovision.sh")],
+                env={
+                    "PATH": f"{path}{os.pathsep}{os.environ['PATH']}",
+                    "AZURE_RESOURCE_GROUP": "rg-test",
+                    "AZURE_AI_ACCOUNT_NAME": "test-account",
+                    "AZURE_ENV_NAME": "test",
+                    "KB_ACCESS_MODE": "purview",
+                    "AZURE_SUBSCRIPTION_ID": "test-subscription",
+                    "AZURE_AI_MODEL_NAME": "gpt-5-mini",
+                    "AZURE_AI_MODEL_VERSION": "2025-08-07",
+                    "AZURE_AI_MODEL_CAPACITY": "3",
+                },
+                capture_output=True, text=True, timeout=10,
+            )
+        self.assertEqual(result.returncode, 99, result.stderr)
+        self.assertIn("--deployment-name gpt-5-mini --model-name gpt-5-mini --model-version 2025-08-07", result.stdout)
+        self.assertIn("--sku-capacity 3", result.stdout)
+        self.assertIn("env set AZURE_AI_MODEL_DEPLOYMENT_NAME gpt-5-mini", result.stdout)
+
     def test_managed_setup_retries_permission_propagation_and_resumes(self):
         forbidden = HTTPError("https://example.test", 403, "Forbidden", {}, None)
         with (
