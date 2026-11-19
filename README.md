@@ -171,10 +171,12 @@ You are a knowledgeable assistant that answers questions based on
 ## Protect documents with Microsoft Purview
 
 Set `KB_ACCESS_MODE=purview` to use **existing Microsoft Purview sensitivity
-labels** with Azure AI Search (public preview). Search evaluates the signed-in
-user's document rights before returning excerpts. The agent requires delegated
-authorization, excludes unlabeled documents, and never retries against the
-sample index or uses the model to make access decisions.
+labels** with [Foundry IQ][foundry-iq] (Azure AI Search, Purview integration in public
+preview). The Blob indexer extracts text and labels into a protected index.
+A Foundry IQ knowledge base retrieves from that index under the signed-in
+user's permissions. The agent uses only individually labeled references to
+ground answers; it never falls back to the sample index or uses the model to
+make access decisions.
 
 1. Use a fresh azd environment in the Purview tenant. Sign in to `az` and
    `azd` with the same deployment identity, which needs permission to create
@@ -192,20 +194,38 @@ sample index or uses the model to make access decisions.
    The hooks create dedicated Search and Storage resources in the environment's
    resource group. Search uses its system-assigned identity and RBAC, not API
    keys. The `docs` Blob container has no anonymous or shared-key access; Blob
-   soft delete is enabled. The hook configures a new Purview-enabled index and
-   Blob indexer; it never uploads the sample corpus. Post-deploy assigns the
-   agent [Reader and index-scoped Search Index Data Reader][search-roles], not
-   elevated read.
+   soft delete is enabled. The hook configures a Purview-enabled index and
+   Blob indexer, an index-backed knowledge source, and a model-free, extractive
+   Foundry IQ knowledge base. It never uploads the public sample corpus.
+   Post-deploy assigns [Reader and Search Index Data Reader][search-roles]
+   on the dedicated protected Search service for knowledge-base retrieval and
+   schema checks, not elevated read. Don't add unrelated indexes to this service.
 2. Have a tenant administrator approve and assign the
    [Purview extraction roles][purview-index] to the **Search identity** printed
    by the provision hook, not to the agent. `azd` cannot grant those tenant
    permissions. If Purview rejects index provisioning before the grant, rerun
    `azd up` in the same environment after approval.
-3. Apply Purview labels to supported files **before** uploading them with Entra
-   authentication to the private `docs` container. Use a label whose rights grant
-   extraction only to the intended users or groups; a label that only marks a
-   document does not restrict its audience. Check the indexer run and verify a
-   known labeled file before routing any user traffic.
+3. Apply Purview labels to supported files **before** ingestion. Use a label
+   whose rights grant extraction only to intended users or groups; a label
+   that only classifies a document does not restrict its audience. Use a local
+   corpus directory **outside** this repo. Give the ingest operator `Storage
+   Blob Data Contributor` on the `docs` container, `Reader` on the Storage
+   account, and `Search Service Contributor` on the dedicated Search service.
+   The deployer already has the Search role. Run:
+
+   ```bash
+   python3 scripts/ingest_purview.py \
+     --subscription <subscription-id> --search-service <protected-search-name> \
+     --index <PURVIEW_SEARCH_INDEX> --storage-account <PURVIEW_STORAGE_ACCOUNT> \
+     --directory /path/to/approved-corpus
+   ```
+
+   The script checks the destination, uploads with Entra authentication, and
+   waits for a new indexer result with processed documents and no errors or
+   warnings. It does not apply labels or establish that a user has access. An
+   empty successful run from initial provisioning is not ingestion. If a
+   run fails, inspect the indexer status before tearing down the environment;
+   use `--show-indexer-error` for the run-level diagnostic in a trusted terminal.
 
 **Connect the existing company app.** Its trusted backend exchanges the
 user's validated Entra token [on behalf of the user][foundry-obo] for a token
@@ -227,16 +247,30 @@ or previous response. The backend should check the HTTP and Responses
 statuses, and must not cache protected results or replay previous answers into
 later requests. The agent returns source filenames, not Blob URLs.
 
-**Verify before rollout.** Ask the same question as an authorized employee and
-an employee outside the approved group. Confirm the tenant has eligible Purview
-licensing and a published label that restricts extraction before provisioning a
-test environment. An indexer run against an empty container verifies setup,
-not label extraction or enforcement. Include a known unlabeled file and test
-an omitted or expired delegated token. The authorized user should see the
-restricted answer; the other user and unlabeled file should not. Missing or
-invalid tokens should fail rather than return content. Verify that Blob files
-are not downloadable anonymously. Source relabeling and soft deletes only take
-effect in Search after a successful indexer run (every two hours by default).
+**Verify before rollout.** Confirm the tenant has eligible Purview licensing
+and a published label that restricts extraction before provisioning a test
+environment. Ingest two synthetic fixtures with different test facts: a
+labeled Office document readable only by the approved test user and an
+unlabeled control. Use distinct same-tenant identities. With `httpx` installed
+(included in the agent requirements), run the check from a terminal:
+
+```bash
+python3 scripts/test_purview_live.py \
+  --account <foundry-account> --project <foundry-project> \
+  --storage-account <PURVIEW_STORAGE_ACCOUNT> \
+  --allowed-oid <approved-user-object-id> --denied-oid <denied-user-object-id> \
+  --question 'What is the synthetic access-test code?' --expected '<test-code>' \
+  --labeled-blob approved.docx --unlabeled-blob control.docx \
+  --unlabeled-question 'What is the synthetic control code?'
+```
+
+Provide the test backend's Foundry token and the users' delegated Search
+tokens at the hidden prompts, including an expired token for the negative
+case. The check requires a cited answer for the approved user, no answer
+for the denied user or unlabeled control, rejection of missing or expired
+delegation and stateful requests, and denial of anonymous reads. Source
+relabeling and soft deletes only take effect in Search after a successful
+indexer run (every two hours by default).
 For an urgent removal, take the affected index or endpoint out of service until
 the updated results are verified. See [query-time limitations][purview-query],
 including same-tenant users only.
@@ -254,6 +288,7 @@ down` does not manage those directory objects.
 
 [purview-index]: https://learn.microsoft.com/azure/search/search-indexer-sensitivity-labels
 [purview-query]: https://learn.microsoft.com/azure/search/search-query-sensitivity-labels
+[foundry-iq]: https://learn.microsoft.com/azure/search/agentic-retrieval-how-to-retrieve
 [search-roles]: https://learn.microsoft.com/azure/search/search-security-rbac
 [foundry-obo]: https://learn.microsoft.com/azure/foundry/agents/how-to/use-on-behalf-of-flow
 

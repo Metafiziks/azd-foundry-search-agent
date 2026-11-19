@@ -11,15 +11,58 @@ from urllib.error import HTTPError
 
 import httpx
 
+from ingest_purview import corpus_files, index_uploaded_files, matches_corpus
 from purview_host import NO_DOCUMENTS, build_protected_host
 from purview_search import ProtectedSearchError, PurviewSearch, TOKEN_HEADER
 from setup_purview_index import definitions, deploy_search
 
 LABEL = "12345678-4321-4321-4321-123456789abc"
-SCHEMA = definitions("protected", "/storage-id", "private-docs")[0][1]
+DEFINITIONS = {
+    f"/{collection}/{body['name']}": body
+    for collection, body in definitions("protected", "/storage-id", "private-docs")
+}
+SCHEMA = DEFINITIONS["/indexes/protected"]
 
 
 class ProtectedProvisioningTests(unittest.TestCase):
+    def test_ingestion_verifies_blob_destination_even_when_search_redacts_credentials(self):
+        config = dict(definitions("protected", "/storage-id", "docs"))
+        source = config["datasources"] | {"credentials": {"connectionString": None}}
+        account = {"id": "/storage-id", "allowBlobPublicAccess": False, "allowSharedKeyAccess": False}
+        self.assertTrue(matches_corpus(source, config["indexers"], SCHEMA, account, "protected"))
+        self.assertFalse(matches_corpus(source, config["indexers"], SCHEMA, account | {"id": "/other"}, "protected"))
+
+    def test_ingestion_rejects_empty_corpus_and_symlinks(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "notes.md").touch()
+            with self.assertRaisesRegex(ValueError, "No supported documents"):
+                corpus_files(root)
+            (root / "alias.docx").symlink_to(root / "notes.md")
+            with self.assertRaisesRegex(ValueError, "symlinks"):
+                corpus_files(root)
+
+    def test_indexer_waits_for_fresh_run_and_rejects_zero_processed(self):
+        def result(start, items):
+            return json.dumps({"lastResult": {
+                "startTime": start, "endTime": start, "status": "success",
+                "itemsProcessed": items, "itemsFailed": 0, "warnings": [], "errors": [],
+            }}).encode()
+
+        old = result("old", 0)
+        for processed in (0, 1):
+            with (
+                patch("ingest_purview.request", side_effect=[old, b"", old, result("new", processed)]) as request,
+                patch("ingest_purview.time.sleep") as sleep,
+            ):
+                if processed:
+                    self.assertEqual(index_uploaded_files("https://example.test", "index", "token", 1, 10), 1)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "processed=0"):
+                        index_uploaded_files("https://example.test", "index", "token", 1, 10)
+                self.assertEqual([call.args[0] for call in request.call_args_list], ["GET", "POST", "GET", "GET"])
+                sleep.assert_called_once()
+
     def test_explicit_model_is_deployed_even_if_other_models_exist(self):
         root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary:
@@ -97,17 +140,23 @@ class ProtectedRetrievalTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.headers["authorization"], "Bearer app-token")
             if request.method == "GET":
                 self.assertNotIn("x-ms-query-source-authorization", request.headers)
-                return httpx.Response(200, json=SCHEMA)
+                return httpx.Response(200, json=DEFINITIONS[request.url.path])
+            self.assertEqual(request.url.path, "/knowledgebases/protected-kb/retrieve")
             self.assertEqual(request.headers["x-ms-query-source-authorization"], "finance-user-token")
             self.assertNotIn("x-ms-enable-elevated-read", request.headers)
             body = json.loads(request.content)
-            self.assertIn("sensitivity_label_id ne null", body["filter"])
-            return httpx.Response(200, json={"value": [
-                {"content": "Approved excerpt", "metadata_storage_name": "Finance.docx",
-                 "source_url": "https://private.test", "sensitivity_label_id": LABEL},
-                {"content": "Unlabeled excerpt"},
-                {"content": "Invalid label excerpt", "sensitivity_label_id": "not-a-guid"},
-            ]})
+            self.assertIn("sensitivity_label_id ne null", body["knowledgeSourceParams"][0]["filterAddOn"])
+            return httpx.Response(200, json={
+                "response": [{"content": [{"text": "Untrusted aggregate IQ output"}]}],
+                "references": [
+                    {"type": "searchIndex", "sensitivityLabelInfo": {"labelId": LABEL},
+                     "citationUrl": "https://private.test",
+                     "sourceData": {"content": "Approved excerpt", "metadata_storage_name": "Finance.docx"}},
+                    {"type": "searchIndex", "sourceData": {"content": "Unlabeled excerpt"}},
+                    {"type": "searchIndex", "sensitivityLabelInfo": {"labelId": "not-a-guid"},
+                     "sourceData": {"content": "Invalid label excerpt"}},
+                ],
+            })
 
         model = SimpleNamespace(run=AsyncMock(return_value=SimpleNamespace(text="Approved answer")))
         async with self.client(httpx.MockTransport(search_response)) as search_http:
@@ -162,10 +211,15 @@ class ProtectedRetrievalTests(unittest.IsolatedAsyncioTestCase):
         model.run.assert_not_awaited()
 
     async def test_wrong_schema_or_search_error_never_falls_back_to_unfiltered_search(self):
-        for schema, status, expected_methods in (
-            (SCHEMA | {"purviewEnabled": False}, 200, ["GET"]),
-            (SCHEMA, 401, ["GET", "POST"]),
-            (SCHEMA, 502, ["GET", "POST"]),
+        targets = list(DEFINITIONS)[-2:]  # Search source and knowledge base
+        source, kb = targets
+        for invalid, status, expected_methods in (
+            ({"/indexes/protected": SCHEMA | {"purviewEnabled": False}}, 200, ["GET"]),
+            ({kb: {"knowledgeSources": [{"name": "unexpected"}]}}, 200, ["GET"] * 2),
+            ({source: {"kind": "web"}}, 200, ["GET"] * 3),
+            ({}, 401, ["GET"] * 3 + ["POST"]),
+            ({}, 206, ["GET"] * 3 + ["POST"]),
+            ({}, 502, ["GET"] * 3 + ["POST"]),
         ):
             with self.subTest(status=status):
                 methods = []
@@ -173,7 +227,7 @@ class ProtectedRetrievalTests(unittest.IsolatedAsyncioTestCase):
                 def search_response(request):
                     methods.append(request.method)
                     if request.method == "GET":
-                        return httpx.Response(200, json=schema)
+                        return httpx.Response(200, json=(DEFINITIONS | invalid)[request.url.path])
                     return httpx.Response(status, json={"error": "details not for the model"})
 
                 async with self.client(httpx.MockTransport(search_response)) as http:

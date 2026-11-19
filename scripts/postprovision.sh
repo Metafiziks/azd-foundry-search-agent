@@ -213,6 +213,7 @@ if [ "$KB_ACCESS_MODE" = "purview" ]; then
   azd env set PURVIEW_SEARCH_INDEX "$INDEX_NAME"
   azd env set AZURE_SEARCH_RESOURCE_ID "$SEARCH_RESOURCE_ID"
   azd env set PURVIEW_STORAGE_ACCOUNT "$STORAGE_NAME"
+  azd env set PURVIEW_SEARCH_IDENTITY "$SEARCH_PRINCIPAL"
   echo "Purview Search identity for tenant admin approval: $SEARCH_PRINCIPAL"
 
   PRINCIPAL_TYPE=$(az account show --query user.type -o tsv)
@@ -465,7 +466,7 @@ WAIT_EOF
 echo ""
 
 if [ "$KB_ACCESS_MODE" = "purview" ]; then
-  echo "Purview mode: private Storage and protected Search provisioned; sample upload and memory skipped."
+  echo "Purview mode: infrastructure only. Use scripts/ingest_purview.py to upload labeled documents after tenant approval."
   exit 0
 fi
 
