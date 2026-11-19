@@ -53,7 +53,7 @@ Memory is intentionally separate from document retrieval. Azure AI Search remain
 
 - [Current Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd) with the `microsoft.foundry` extension (includes the Foundry Projects and Agents providers)
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
-- Azure subscription with **gpt-5 quota** in `eastus2` (or adjust `AZURE_LOCATION` and the model in postprovision)
+- Azure subscription with **gpt-5 GlobalStandard quota** in `eastus2`, or set `AZURE_AI_MODEL_NAME`, `AZURE_AI_MODEL_VERSION`, and `AZURE_AI_MODEL_CAPACITY` with `azd env set` to use another supported GlobalStandard model with quota. For example, `gpt-5-mini` version `2025-08-07` can be used to smoke-test protected retrieval.
 
 Install the azd extension if you haven't already:
 
@@ -228,7 +228,10 @@ statuses, and must not cache protected results or replay previous answers into
 later requests. The agent returns source filenames, not Blob URLs.
 
 **Verify before rollout.** Ask the same question as an authorized employee and
-an employee outside the approved group. Include a known unlabeled file and test
+an employee outside the approved group. Confirm the tenant has eligible Purview
+licensing and a published label that restricts extraction before provisioning a
+test environment. An indexer run against an empty container verifies setup,
+not label extraction or enforcement. Include a known unlabeled file and test
 an omitted or expired delegated token. The authorized user should see the
 restricted answer; the other user and unlabeled file should not. Missing or
 invalid tokens should fail rather than return content. Verify that Blob files
