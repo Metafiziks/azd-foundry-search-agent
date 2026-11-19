@@ -9,6 +9,12 @@ import time
 import urllib.error
 import urllib.request
 
+SEARCH_API_VERSION = "2026-11-01-preview"
+
+
+def blob_source_description(storage_id):
+    return f"Protected corpus storage: {storage_id}"
+
 
 def request(method, url, token, body=None, create_only=False):
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -32,6 +38,14 @@ def deploy_search(url, token, body, resume):
                 raise SystemExit(f"Search configuration failed: HTTP {error.code}: {details}") from None
             print(f"Waiting for Search RBAC (HTTP {error.code})...", flush=True)
             time.sleep(20)
+
+
+def search_token(subscription):
+    return subprocess.check_output(
+        ["az", "account", "get-access-token", "--subscription", subscription,
+         "--resource", "https://search.azure.com", "--query", "accessToken", "-o", "tsv"],
+        text=True,
+    ).strip()
 
 
 def definitions(index, storage_id, container):
@@ -64,6 +78,7 @@ def definitions(index, storage_id, container):
     source = {
         "name": f"{index}-blob",
         "type": "azureblob",
+        "description": blob_source_description(storage_id),
         "credentials": {"connectionString": f"ResourceId={storage_id}/;"},
         "container": {"name": container},
         "indexerPermissionOptions": ["sensitivityLabel"],
@@ -85,7 +100,25 @@ def definitions(index, storage_id, container):
             *({"sourceFieldName": field, "targetFieldName": name} for field, name, _ in metadata),
         ],
     }
-    return [("indexes", index_definition), ("datasources", source), ("indexers", indexer)]
+    knowledge_source = {
+        "name": f"{index}-source",
+        "kind": "searchIndex",
+        "searchIndexParameters": {
+            "searchIndexName": index,
+            "semanticConfigurationName": "default",
+            "sourceDataFields": [{"name": field} for field in ("metadata_storage_name", "content")],
+        },
+    }
+    knowledge_base = {
+        "name": f"{index}-kb",
+        "knowledgeSources": [{"name": knowledge_source["name"]}],
+        "retrievalReasoningEffort": {"kind": "minimal"},
+        "outputMode": "extractiveData",
+    }
+    return [
+        ("indexes", index_definition), ("datasources", source), ("indexers", indexer),
+        ("knowledgesources", knowledge_source), ("knowledgebases", knowledge_base),
+    ]
 
 
 def main():
@@ -128,12 +161,12 @@ def main():
         parser.error("Native Search deletion detection requires Blob versioning to be disabled")
 
     endpoint = f"https://{args.search_service}.search.windows.net"
-    search_token = token("https://search.azure.com")
+    bearer = search_token(subscription)
     for collection, body in definitions(args.index, storage_id, args.container):
-        url = f"{endpoint}/{collection}/{body['name']}?api-version=2026-11-01-preview"
-        deploy_search(url, search_token, body, args.resume)
+        url = f"{endpoint}/{collection}/{body['name']}?api-version={SEARCH_API_VERSION}"
+        deploy_search(url, bearer, body, args.resume)
         print(f"Configured {collection}/{body['name']}", flush=True)
-    print("Verify the initial indexer execution and labeled documents before sending user traffic.")
+    print("Provisioned a protected Foundry IQ knowledge base. No documents were uploaded by setup.")
 
 
 if __name__ == "__main__":

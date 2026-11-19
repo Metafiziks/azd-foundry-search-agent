@@ -1,4 +1,4 @@
-"""Stateless retrieval against a Purview-enabled Azure AI Search index."""
+"""Stateless Foundry IQ retrieval from one Purview-enabled Search index."""
 
 import logging
 import re
@@ -45,8 +45,7 @@ def is_purview_index(schema: dict, index: str) -> bool:
     )
 
 
-def _has_label(document: dict) -> bool:
-    value = document.get(LABEL_FIELD)
+def _has_label(value: object) -> bool:
     if not isinstance(value, str):
         return False
     try:
@@ -62,8 +61,41 @@ class PurviewSearch:
     ) -> None:
         self.url = index_url(endpoint, index)
         self.index = index
+        self.source = f"{index}-source"
+        self.source_url = f"{endpoint.rstrip('/')}/knowledgesources/{self.source}"
+        self.kb_url = f"{endpoint.rstrip('/')}/knowledgebases/{index}-kb"
         self.credential = credential
         self.http = http
+
+    async def _verify_source(self, params: dict, headers: dict) -> None:
+        async def read(url: str) -> dict:
+            response = await self.http.get(url, params=params, headers=headers, follow_redirects=False)
+            response.raise_for_status()
+            result = response.json()
+            if not isinstance(result, dict):
+                raise ProtectedSearchError("Invalid protected Foundry IQ configuration")
+            return result
+
+        schema = await read(self.url)
+        if not is_purview_index(schema, self.index):
+            raise ProtectedSearchError("The configured Search index is not Purview-enabled")
+        kb = await read(self.kb_url)
+        sources = kb.get("knowledgeSources")
+        if (
+            not isinstance(sources, list)
+            or len(sources) != 1
+            or not isinstance(sources[0], dict)
+            or sources[0].get("name") != self.source
+        ):
+            raise ProtectedSearchError("Foundry IQ must use only the configured protected source")
+        source = await read(self.source_url)
+        settings = source.get("searchIndexParameters")
+        if (
+            source.get("kind") != "searchIndex"
+            or not isinstance(settings, dict)
+            or settings.get("searchIndexName") != self.index
+        ):
+            raise ProtectedSearchError("Foundry IQ source does not target the protected index")
 
     async def excerpts(self, question: str, user_token: str) -> list[dict[str, str]]:
         # Forward the opaque delegated token only to Search; Search validates it.
@@ -74,29 +106,36 @@ class PurviewSearch:
         headers = {"Authorization": f"Bearer {app_token.token}"}
         params = {"api-version": API_VERSION}
         try:
-            schema = await self.http.get(self.url, params=params, headers=headers, follow_redirects=False)
-            schema.raise_for_status()
-            definition = schema.json()
-            if not isinstance(definition, dict) or not is_purview_index(definition, self.index):
-                raise ProtectedSearchError("The configured Search index is not Purview-enabled")
-
+            await self._verify_source(params, headers)
             response = await self.http.post(
-                f"{self.url}/docs/search",
+                f"{self.kb_url}/retrieve",
                 params=params,
                 headers={**headers, "x-ms-query-source-authorization": user_token},
                 json={
-                    "search": question,
-                    "top": 5,
-                    "queryType": "semantic",
-                    "semanticConfiguration": "default",
-                    "captions": "extractive",
-                    "filter": f"{LABEL_FIELD} ne null and {LABEL_FIELD} ne ''",
-                    "select": f"metadata_storage_name,content,{LABEL_FIELD}",
+                    "intents": [{"type": "semantic", "search": question}],
+                    "retrievalReasoningEffort": {"kind": "minimal"},
+                    "outputMode": "extractiveData",
+                    "maxRuntimeInSeconds": 25,
+                    "maxOutputDocuments": 5,
+                    "knowledgeSourceParams": [{
+                        "kind": "searchIndex",
+                        "knowledgeSourceName": self.source,
+                        "failOnError": True,
+                        "includeReferences": True,
+                        "includeReferenceSourceData": True,
+                        "filterAddOn": f"{LABEL_FIELD} ne null and {LABEL_FIELD} ne ''",
+                    }],
                 },
                 follow_redirects=False,
             )
             response.raise_for_status()
-            documents = response.json()["value"]
+            if response.status_code != 200:
+                logger.warning("Foundry IQ returned incomplete retrieval (HTTP %d)", response.status_code)
+                raise ProtectedSearchError("Protected document retrieval was incomplete")
+            result = response.json()
+            if not isinstance(result, dict) or result.get("error"):
+                raise ProtectedSearchError("Invalid protected Foundry IQ response")
+            references = result["references"]
         except httpx.HTTPStatusError as exc:
             logger.warning("Purview Search request denied or unavailable (HTTP %d)", exc.response.status_code)
             raise ProtectedSearchError("Protected document retrieval failed") from None
@@ -104,19 +143,25 @@ class PurviewSearch:
             logger.warning("Purview Search request failed (%s)", type(exc).__name__)
             raise ProtectedSearchError("Protected document retrieval failed") from None
 
-        if not isinstance(documents, list):
-            raise ProtectedSearchError("Invalid protected Search response")
+        if not isinstance(references, list):
+            raise ProtectedSearchError("Invalid protected Foundry IQ references")
 
         results = []
-        for doc in documents:
-            if not isinstance(doc, dict) or not _has_label(doc):
+        # Ground only from individually labeled references, not aggregate IQ output.
+        for reference in references[:5]:
+            if not isinstance(reference, dict) or reference.get("type") != "searchIndex":
                 continue
-            text = " ".join(
-                caption["text"] for caption in (doc.get("@search.captions") or [])
-                if isinstance(caption, dict) and isinstance(caption.get("text"), str)
-            ) or doc.get("content")
+            label = reference.get("sensitivityLabelInfo")
+            if not isinstance(label, dict) or not _has_label(label.get("labelId")):
+                continue
+            doc = reference.get("sourceData")
+            if not isinstance(doc, dict):
+                raise ProtectedSearchError("Labeled Foundry IQ reference has no source data")
+            text = doc.get("content")
             if isinstance(text, str) and text:
-                # Do not expose private Blob URLs, label IDs or other index metadata.
                 name = doc.get("metadata_storage_name")
-                results.append({"source": name if isinstance(name, str) and name else "Document", "excerpt": text})
+                results.append({
+                    "source": name if isinstance(name, str) and name else "Document",
+                    "excerpt": text[:6000],
+                })
         return results

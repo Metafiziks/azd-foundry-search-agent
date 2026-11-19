@@ -60,8 +60,8 @@ PY
   az role assignment create --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
     --role "Reader" --scope "$SEARCH_RESOURCE_ID" --output none
   az role assignment create --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
-    --role "Search Index Data Reader" --scope "${SEARCH_RESOURCE_ID}/indexes/${PURVIEW_SEARCH_INDEX}" --output none
-  echo "Protected Search RBAC granted. Run the approved/denied test through the signed-in app after loading labeled fixtures."
+    --role "Search Index Data Reader" --scope "$SEARCH_RESOURCE_ID" --output none
+  echo "Foundry IQ read access granted on the dedicated protected Search service. Run live acceptance after ingestion."
   exit 0
 fi
 
