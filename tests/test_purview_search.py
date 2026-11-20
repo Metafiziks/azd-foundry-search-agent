@@ -132,6 +132,18 @@ fi
                 self.assertEqual(denied_request.kwargs["headers"][TOKEN_HEADER], "denied-token")
                 self.assertEqual(allowed_request.kwargs["json"], denied_request.kwargs["json"])
 
+        client = Mock()
+        client.post.side_effect = [
+            httpx.ReadTimeout("cold start"),
+            result(200, "ORCHID-47 (approved.docx)"),
+            result(200, NO_DOCUMENTS), result(200, NO_DOCUMENTS), result(401),
+            httpx.ReadTimeout("stateful requests must not be replayed"),
+        ]
+        with self.assertRaises(httpx.ReadTimeout):
+            run_tests(client, args, "backend-token", "allowed-token", "denied-token")
+        self.assertEqual(client.post.call_count, 6)
+        self.assertEqual(client.post.call_args_list[0], client.post.call_args_list[1])
+
 
 class ProtectedProvisioningTests(unittest.TestCase):
     def test_ingestion_verifies_blob_destination_even_when_search_redacts_credentials(self):

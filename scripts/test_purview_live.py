@@ -81,11 +81,19 @@ def run_tests(http, args, backend_token, allowed_token, denied_token, expired_to
         headers = {"Authorization": f"Bearer {backend_token}", "x-ms-user-identity": oid}
         if token:
             headers["x-client-search-access-token"] = token
-        start = time.monotonic()
-        response = http.post(
-            endpoint, headers=headers, params={"api-version": "v1"},
-            json={"input": question, "store": store, "background": False},
-        )
+        for attempt in range(2):
+            start = time.monotonic()
+            try:
+                response = http.post(
+                    endpoint, headers=headers, params={"api-version": "v1"},
+                    json={"input": question, "store": store, "background": False},
+                )
+                break
+            except httpx.ReadTimeout:
+                print(f"{case}: no HTTP response after {time.monotonic() - start:.2f}s", flush=True)
+                if attempt or store:
+                    raise
+                print(f"{case}: retrying once after the read timeout", flush=True)
         try:
             body = response.json()
         except ValueError:
