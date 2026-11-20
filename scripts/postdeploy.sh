@@ -39,17 +39,11 @@ if [ "$KB_ACCESS_MODE" = "purview" ]; then
   : "${PURVIEW_SEARCH_INDEX:?Run azd provision to create the protected index}"
   : "${COG_ACCOUNT:?Could not find the deployed Foundry account}"
   echo "  Looking for: ${AGENT_IDENTITY_NAME}"
-  IDENTITY_QUERY=$(python3 - "$AGENT_IDENTITY_NAME" <<'PY'
-import sys
-from urllib.parse import urlencode
-
-name = sys.argv[1].replace("'", "''")
-print(urlencode({"$filter": f"displayName eq '{name}'", "$select": "id"}))
-PY
-)
+  DEPLOYMENT_TENANT=$(az account show --query tenantId -o tsv)
+  : "${DEPLOYMENT_TENANT:?Expected Azure CLI tenant ID for the protected subscription}"
   for attempt in 1 2 3 4 5 6; do
-    HOSTING_OID=$(az rest --url "https://graph.microsoft.com/v1.0/servicePrincipals?$IDENTITY_QUERY" \
-      --query 'value[].id' -o tsv)
+    HOSTING_OID=$(python3 "$(dirname "$0")/purview_graph.py" --subscription "$AZURE_SUBSCRIPTION_ID" \
+      --tenant "$DEPLOYMENT_TENANT" --display-name "$AGENT_IDENTITY_NAME")
     if [ -n "$HOSTING_OID" ]; then break; fi
     if [ "$attempt" -lt 6 ]; then sleep 10; fi
   done

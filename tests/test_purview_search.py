@@ -12,6 +12,7 @@ from urllib.error import HTTPError
 import httpx
 
 from ingest_purview import corpus_files, index_uploaded_files, matches_corpus
+from purview_graph import graph_principals
 from purview_host import NO_DOCUMENTS, build_protected_host
 from purview_search import ProtectedSearchError, PurviewSearch, TOKEN_HEADER
 from setup_purview_index import definitions, deploy_search
@@ -26,6 +27,16 @@ SCHEMA = DEFINITIONS["/indexes/protected"]
 
 
 class ProtectedAcceptanceTests(unittest.TestCase):
+    def test_graph_lookup_rejects_a_token_from_the_wrong_tenant(self):
+        with (
+            patch("purview_graph.subprocess.check_output", return_value=b'{"tenant":"wrong-tenant"}') as cli,
+            patch("purview_graph.urlopen") as graph,
+        ):
+            with self.assertRaisesRegex(ValueError, "does not belong to the deployment tenant"):
+                graph_principals("selected-subscription", "selected-tenant", None, None)
+            self.assertIn("selected-subscription", cli.call_args.args[0])
+            graph.assert_not_called()
+
     def test_postdeploy_propagates_acceptance_gate_failure_only_when_configured(self):
         root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary:
@@ -34,15 +45,14 @@ class ProtectedAcceptanceTests(unittest.TestCase):
                 "az": """#!/usr/bin/env bash
 case "$1 $2" in
     "cognitiveservices account") echo test-account ;;
-    "rest --url") echo 12345678-4321-4321-4321-123456789abc ;;
+    "account show") echo deployment-tenant ;;
     "role assignment") exit 0 ;;
     *) exit 98 ;;
 esac
 """,
                 "python3": """#!/usr/bin/env bash
-if [ "$1" = "-" ]; then
-    cat >/dev/null
-    echo fake-query
+if [[ "$1" == */purview_graph.py ]]; then
+    echo 12345678-4321-4321-4321-123456789abc
 else
     printf 'gate command: %s\\n' "$*"
     exit 7
