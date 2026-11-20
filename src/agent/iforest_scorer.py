@@ -5,7 +5,6 @@ Falls back gracefully if model not trained yet or Blob unreachable.
 """
 from __future__ import annotations
 
-import io
 import logging
 import math
 import os
@@ -40,7 +39,11 @@ def _load_model():
             client = BlobServiceClient(account_url=BLOB_ACCOUNT_URL, credential=credential)
             blob = client.get_blob_client(container=BLOB_CONTAINER, blob=BLOB_MODEL_KEY)
             data = blob.download_blob().readall()
-            _model = pickle.loads(data)
+            model = pickle.loads(data)
+            if model.n_features_in_ != 6:
+                logger.warning("Ignoring an IsolationForest model not trained on six retrieval features")
+                return None
+            _model = model
             logger.info("IForest loaded from %s/%s/%s", BLOB_ACCOUNT_URL, BLOB_CONTAINER, BLOB_MODEL_KEY)
         except Exception as exc:
             logger.warning("IForest load failed (non-fatal): %s", exc)

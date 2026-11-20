@@ -6,6 +6,10 @@ The corpus is independent of the optional Foundry Memory Store. Documents remain
 the source of truth for RAG answers and citations; memory is only for scoped
 user/session continuity such as preferences or workflow context.
 
+This directory is uploaded to public Blob storage in sample mode. Do not put
+restricted documents here. Use the private source configured in
+[Protect documents with Microsoft Purview](../README.md#protect-documents-with-microsoft-purview).
+
 ## Default content
 
 The default docs are sample manufacturing operations documents:

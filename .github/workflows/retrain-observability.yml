@@ -1,9 +1,6 @@
 name: Retrain ML Observability Models
 
 on:
-  schedule:
-    # Every Sunday at 02:00 UTC — after the weekly eval run
-    - cron: "0 2 * * 0"
   workflow_dispatch:
     inputs:
       lookback_days:
