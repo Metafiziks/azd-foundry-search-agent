@@ -335,6 +335,19 @@ down` does not manage those directory objects.
 [search-roles]: https://learn.microsoft.com/azure/search/search-security-rbac
 [foundry-obo]: https://learn.microsoft.com/azure/foundry/agents/how-to/use-on-behalf-of-flow
 
+## Live validation
+
+The November 2026 Azure tests covered both modes in separate disposable deployments:
+
+| Test | Result |
+|---|---|
+| Sample RAG and automated evals | All 12 generated RAG cases passed with memory disabled: 100% citation recall, 80.4% keyword recall, 85.4% faithfulness, 100% answer relevance, and 33.2 s p95 latency. |
+| Sample ML observability | HHEM scored all 12 answers. IsolationForest trained on 96 hosted Search retrieval records, loaded from private Blob Storage, and produced nonzero anomaly scores in Log Analytics. |
+| Sample managed memory | The required-memory run failed before Search. Memory Store returned HTTP 403 with a downstream embedding HTTP 401, while direct Entra-authenticated embedding succeeded. The passing RAG run skipped the recall case. |
+| Protected Purview retrieval | The authorized user retrieved the labeled document with a citation; the unauthorized user and unlabeled control received no protected content. Missing delegation and stateful requests were rejected, and anonymous Blob reads were denied. This test verified query-time enforcement, not file encryption at rest. |
+
+Both deployments were torn down. No active resources remained in either test resource group.
+
 ## Test the agent
 
 ```bash
@@ -362,7 +375,7 @@ This template uses Azure AI Foundry Agent Service Memory Store when the current 
 - Provisioning grants `Foundry User` and `Cognitive Services OpenAI User` on the Foundry account/project to the hosted agent and project identities so Memory Store can read/write and run embedding operations.
 - Avoid storing sensitive personal data, secrets, credentials, financial data, or precise location data. The store is configured to favor stable manufacturing workflow preferences.
 
-Memory-specific telemetry is written to `AgentTelemetry_CL` with `MemoryEnabled`, `MemoryReadCount`, `MemoryWriteCount`, `MemoryLatencyMs`, and `MemoryStatus` fields when Log Analytics ingestion is configured.
+Memory-specific telemetry is written to `AgentTelemetry_CL` with `MemoryEnabled_b`, `MemoryReadCount_d`, `MemoryWriteCount_d`, `MemoryLatencyMs_d`, and `MemoryStatus_s` when Log Analytics ingestion is configured.
 
 ## Environment variables
 
@@ -495,7 +508,7 @@ The `postdeploy.sh` script:
 3. Trains IsolationForest once at least ten retrieval rows are available and uploads `iforest.pkl` to the private Blob Storage `models` container. The upload identity needs contributor access to that container; the hosted agent only needs reader access.
 4. The hosted agent loads the model on its first retrieval after the artifact is available. An instance that already loaded a model uses the cached model until restart.
 
-The GitHub Actions workflow (`.github/workflows/retrain-observability.yml`) uses the same feature contract to retrain weekly from the last 30 days of hosted retrieval data. HHEM runs in the eval process, comparing each RAG answer against its expected source documents; it reports no score for memory recall.
+HHEM runs in the eval process, comparing each RAG answer against its expected source documents. It does not score memory recall.
 
 ### Log Analytics Schema (AgentTelemetry_CL)
 
@@ -510,7 +523,7 @@ The GitHub Actions workflow (`.github/workflows/retrain-observability.yml`) uses
 | `HhemScore_d` | real | HHEM hallucination probability (eval runs only) |
 | `AnomalyScore_d` | real | IForest score (negative = more anomalous) |
 | `IsAnomaly_b` | boolean | True if anomaly detected |
-| `IsBaseline_b` | boolean | True for bootstrap training rows |
+| `IsBaseline_b` | boolean | True for eval rows from additional baseline passes |
 | `MemoryEnabled_b` | boolean | Whether Foundry Memory was enabled for the row |
 | `MemoryReadCount_d` | real | Number of memory records retrieved/injected |
 | `MemoryWriteCount_d` | real | Number of messages queued for memory extraction |
@@ -541,19 +554,16 @@ AgentTelemetry_CL
 | render timechart
 ```
 
-### Weekly Retrain
+### Manual retraining
 
-The `.github/workflows/retrain-observability.yml` workflow triggers every Sunday 02:00 UTC:
-- Queries last 30 days from Log Analytics via `azure-monitor-query` SDK
-- Retrains IsolationForest on production distribution
-- Uploads new `iforest.pkl` to Blob Storage → agent picks up on next cold start
+There is no scheduled retraining. The `retrain-observability.yml` workflow runs only on manual dispatch. It uses the same six retrieval features as deployment-time training, defaults to a 30-day Log Analytics lookback, and uploads a new `iforest.pkl` to Blob Storage. An agent process with a cached model picks up the replacement after restart. Disabling scheduled retraining does not change initial training during sample-mode deployment.
 
 Required GitHub secrets/variables:
 - `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (OIDC)
 - `LOG_ANALYTICS_WORKSPACE_ID` (set automatically by `postprovision.sh`)
 - `BLOB_ACCOUNT_URL` (set automatically by `postprovision.sh`)
 
-To trigger manually:
+Once the manual-only definition is on the default branch and the workflow is enabled in GitHub Actions, dispatch it with:
 ```bash
 gh workflow run retrain-observability.yml
 ```
