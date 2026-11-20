@@ -16,12 +16,14 @@ SEARCH_NAME="${SAFE}-search"
 STORAGE_NAME=$(echo "$AZURE_ENV_NAME" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]' | cut -c1-20)docs
 INDEX_NAME="${SAFE}-index"
 KB_ACCESS_MODE="${KB_ACCESS_MODE:-sample}"
+if [ -n "${AZURE_SUBSCRIPTION_ID:-}" ]; then
+  az() { command az "$@" --subscription "$AZURE_SUBSCRIPTION_ID"; }
+fi
 case "$KB_ACCESS_MODE" in
   purview)
     SEARCH_NAME="${SAFE}-purview-search"
     STORAGE_NAME="${STORAGE_NAME%docs}pdoc"
     INDEX_NAME="${SAFE}-purview"
-    az() { command az "$@" --subscription "$AZURE_SUBSCRIPTION_ID"; }
     ;;
   sample)
     if [ -n "${PURVIEW_SEARCH_ENDPOINT:-}${PURVIEW_SEARCH_INDEX:-}" ]; then
@@ -671,6 +673,7 @@ azd env set LOG_ANALYTICS_WORKSPACE_ID    "$WORKSPACE_ID"
 azd env set LOG_ANALYTICS_DCE             "$DCE_ENDPOINT"
 azd env set LOG_ANALYTICS_DCR_IMMUTABLE_ID "$DCR_IMMUTABLE_ID"
 azd env set LOG_ANALYTICS_STREAM_NAME    "Custom-AgentTelemetry_CL"
+azd env set BLOB_ACCOUNT_URL "https://${STORAGE_NAME}.blob.core.windows.net"
 echo "  ✓ Log Analytics env vars saved"
 
 # Create models container in blob for IsolationForest

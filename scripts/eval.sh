@@ -30,7 +30,10 @@ if [ ! -f "${VENV_DIR}/bin/python3" ]; then
   echo "► Creating eval virtualenv..."
   python3 -m venv "${VENV_DIR}"
 fi
-"${VENV_DIR}/bin/pip" install azure-identity -q
+"${VENV_DIR}/bin/pip" install -q azure-identity azure-monitor-ingestion
+if [ "${SKIP_HHEM:-false}" != "true" ]; then
+  "${VENV_DIR}/bin/pip" install -q 'transformers>=4.51,<5' 'torch>=2.6'
+fi
 
 echo ""
 "${VENV_DIR}/bin/python3" "${SCRIPT_DIR}/run_evals.py" \
