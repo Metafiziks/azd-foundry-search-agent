@@ -261,9 +261,14 @@ class ProtectedRetrievalTests(unittest.IsolatedAsyncioTestCase):
                     {"type": "searchIndex", "sensitivityLabelInfo": {"labelId": LABEL},
                      "citationUrl": "https://private.test",
                      "sourceData": {"content": "Approved excerpt", "metadata_storage_name": "Finance.docx"}},
+                    {"type": "searchIndex", "sourceData": {"content": "Preview excerpt",
+                     "metadata_storage_name": "Plan.docx", "sensitivity_label_id": LABEL}},
                     {"type": "searchIndex", "sourceData": {"content": "Unlabeled excerpt"}},
                     {"type": "searchIndex", "sensitivityLabelInfo": {"labelId": "not-a-guid"},
-                     "sourceData": {"content": "Invalid label excerpt"}},
+                     "sourceData": {"content": "Invalid label excerpt", "sensitivity_label_id": LABEL}},
+                    {"type": "searchIndex", "sensitivityLabelInfo": {"labelId": LABEL},
+                     "sourceData": {"content": "Conflicting label excerpt",
+                                    "sensitivity_label_id": "22345678-4321-4321-4321-123456789abc"}},
                 ],
             })
 
@@ -278,7 +283,10 @@ class ProtectedRetrievalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()["status"], "completed")
         self.assertIn("Approved answer", response.text)
         payload = json.loads(model.run.await_args.args[0])
-        self.assertEqual(payload["documents"], [{"source": "Finance.docx", "excerpt": "Approved excerpt"}])
+        self.assertEqual(payload["documents"], [
+            {"source": "Finance.docx", "excerpt": "Approved excerpt"},
+            {"source": "Plan.docx", "excerpt": "Preview excerpt"},
+        ])
         self.assertNotIn("finance-user-token", response.text)
 
     async def test_requires_delegation_and_stateless_input_before_contacting_search(self):

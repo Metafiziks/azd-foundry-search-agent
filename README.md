@@ -173,6 +173,8 @@ You are a knowledgeable assistant that answers questions based on
 Set `KB_ACCESS_MODE=purview` to use **existing Microsoft Purview sensitivity
 labels** with [Foundry IQ][foundry-iq] (Azure AI Search, Purview integration in public
 preview). The Blob indexer extracts text and labels into a protected index.
+The agent requires a valid label on each returned reference, using the
+annotated index field when the preview API omits reference-level label metadata.
 A Foundry IQ knowledge base retrieves from that index under the signed-in
 user's permissions. The agent uses only individually labeled references to
 ground answers; it never falls back to the sample index or uses the model to
