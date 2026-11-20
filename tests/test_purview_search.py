@@ -6,7 +6,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from urllib.error import HTTPError
 
 import httpx
@@ -15,6 +15,7 @@ from ingest_purview import corpus_files, index_uploaded_files, matches_corpus
 from purview_host import NO_DOCUMENTS, build_protected_host
 from purview_search import ProtectedSearchError, PurviewSearch, TOKEN_HEADER
 from setup_purview_index import definitions, deploy_search
+from test_purview_live import acceptance_files, run_tests
 
 LABEL = "12345678-4321-4321-4321-123456789abc"
 DEFINITIONS = {
@@ -22,6 +23,104 @@ DEFINITIONS = {
     for collection, body in definitions("protected", "/storage-id", "private-docs")
 }
 SCHEMA = DEFINITIONS["/indexes/protected"]
+
+
+class ProtectedAcceptanceTests(unittest.TestCase):
+    def test_postdeploy_propagates_acceptance_gate_failure_only_when_configured(self):
+        root = Path(__file__).resolve().parents[1]
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            for name, script in {
+                "az": """#!/usr/bin/env bash
+case "$1 $2" in
+    "cognitiveservices account") echo test-account ;;
+    "rest --url") echo 12345678-4321-4321-4321-123456789abc ;;
+    "role assignment") exit 0 ;;
+    *) exit 98 ;;
+esac
+""",
+                "python3": """#!/usr/bin/env bash
+if [ "$1" = "-" ]; then
+    cat >/dev/null
+    echo fake-query
+else
+    printf 'gate command: %s\\n' "$*"
+    exit 7
+fi
+""",
+            }.items():
+                command = path / name
+                command.write_text(script)
+                command.chmod(0o700)
+            env = {
+                "PATH": f"{path}{os.pathsep}{os.environ['PATH']}",
+                "AZURE_RESOURCE_GROUP": "rg-test",
+                "AZURE_ENV_NAME": "test-project",
+                "KB_ACCESS_MODE": "purview",
+                "AZURE_SUBSCRIPTION_ID": "test-subscription",
+                "PURVIEW_SEARCH_INDEX": "test-index",
+                "PURVIEW_STORAGE_ACCOUNT": "teststorage",
+                "AZURE_SEARCH_RESOURCE_ID": "/searchServices/test-search",
+            }
+            for config in ("", str(path / "fixtures.json")):
+                with self.subTest(configured=bool(config)):
+                    result = subprocess.run(
+                        ["bash", str(root / "scripts/postdeploy.sh")],
+                        env=env | {"PURVIEW_ACCEPTANCE_CONFIG": config},
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 7 if config else 0, result.stderr)
+                    if config:
+                        self.assertIn(f"--config {config} --account test-account --project test-project", result.stdout)
+                        self.assertIn("--search-service test-search --index test-index", result.stdout)
+                    else:
+                        self.assertNotIn("gate command:", result.stdout)
+
+    def test_gate_requires_exactly_two_named_fixtures(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = SimpleNamespace(directory=root, labeled_blob="approved.docx", unlabeled_blob="control.docx")
+            for name in (args.labeled_blob, args.unlabeled_blob):
+                (root / name).touch()
+            self.assertEqual(len(acceptance_files(args)[1]), 2)
+            (root / "unrelated.pdf").touch()
+            with self.assertRaisesRegex(ValueError, "exactly the two named"):
+                acceptance_files(args)
+
+    def test_gate_requires_a_real_denial_and_rejects_control_disclosure(self):
+        args = SimpleNamespace(
+            account="test-account", project="test-project", storage_account="teststorage",
+            allowed_oid="allowed", denied_oid="denied", expected="ORCHID-47", labeled_blob="approved.docx",
+            question="What is the restricted code?", unlabeled_question="What is the control code?",
+            unlabeled_blob="control.docx", unlabeled_expected="MAPLE-82",
+        )
+
+        def result(status, text=None):
+            output = [] if text is None else [{"type": "message", "content": [{"type": "output_text", "text": text}]}]
+            return httpx.Response(status, json={"status": "completed", "output": output})
+
+        for denied, unlabeled, error in (
+            (result(200, NO_DOCUMENTS), result(200, "Not in approved.docx."), None),
+            (result(401), result(200, NO_DOCUMENTS), "denied: expected a completed response"),
+            (result(200, NO_DOCUMENTS), result(200, "MAPLE-82"), "disclosed the control fact"),
+            (result(200, NO_DOCUMENTS), result(200, "See control.docx."), "cited the control file"),
+        ):
+            with self.subTest(error=error):
+                client = Mock()
+                client.post.side_effect = [
+                    result(200, "ORCHID-47 (approved.docx)"), denied, unlabeled, result(401), result(400),
+                ]
+                client.head.return_value = httpx.Response(403)
+                if error is not None:
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        run_tests(client, args, "backend-token", "allowed-token", "denied-token")
+                else:
+                    run_tests(client, args, "backend-token", "allowed-token", "denied-token")
+                    self.assertEqual(client.post.call_count, 5)
+                allowed_request, denied_request = client.post.call_args_list[:2]
+                self.assertEqual(allowed_request.kwargs["headers"][TOKEN_HEADER], "allowed-token")
+                self.assertEqual(denied_request.kwargs["headers"][TOKEN_HEADER], "denied-token")
+                self.assertEqual(allowed_request.kwargs["json"], denied_request.kwargs["json"])
 
 
 class ProtectedProvisioningTests(unittest.TestCase):
