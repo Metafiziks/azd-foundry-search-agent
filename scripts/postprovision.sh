@@ -217,9 +217,12 @@ if [ "$KB_ACCESS_MODE" = "purview" ]; then
   echo "Purview Search identity for tenant admin approval: $SEARCH_PRINCIPAL"
 
   PRINCIPAL_TYPE=$(az account show --query user.type -o tsv)
+  DEPLOYMENT_TENANT=$(az account show --query tenantId -o tsv)
+  : "${DEPLOYMENT_TENANT:?Expected Azure CLI tenant ID for the protected subscription}"
+  GRAPH=(python3 "$(dirname "$0")/purview_graph.py" --subscription "$AZURE_SUBSCRIPTION_ID" --tenant "$DEPLOYMENT_TENANT")
   case "$PRINCIPAL_TYPE" in
     user)
-      PROVISIONER_OID=$(az rest --url 'https://graph.microsoft.com/v1.0/me?$select=id' --query id -o tsv)
+      PROVISIONER_OID=$("${GRAPH[@]}")
       PROVISIONER_TYPE=User
       ;;
     servicePrincipal)
@@ -228,13 +231,15 @@ if [ "$KB_ACCESS_MODE" = "purview" ]; then
         echo "Expected an application ID for the Purview provisioner." >&2
         exit 1
       fi
-      PROVISIONER_OID=$(az rest --url "https://graph.microsoft.com/v1.0/servicePrincipals(appId='$PROVISIONER_APP')?\$select=id" \
-        --query id -o tsv)
+      PROVISIONER_OID=$("${GRAPH[@]}" --app-id "$PROVISIONER_APP")
       PROVISIONER_TYPE=ServicePrincipal
       ;;
     *) echo "Unsupported Purview provisioner identity type: $PRINCIPAL_TYPE" >&2; exit 1 ;;
   esac
-  : "${PROVISIONER_OID:?Could not resolve the Purview provisioner identity}"
+  if ! [[ "$PROVISIONER_OID" =~ ^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$ ]]; then
+    echo "Expected exactly one Purview provisioner identity in the deployment tenant." >&2
+    exit 1
+  fi
   az role assignment create --assignee-object-id "$PROVISIONER_OID" \
     --assignee-principal-type "$PROVISIONER_TYPE" --role "Search Service Contributor" \
     --scope "$SEARCH_RESOURCE_ID" --output none
