@@ -106,7 +106,7 @@ def definitions(index, storage_id, container):
         "searchIndexParameters": {
             "searchIndexName": index,
             "semanticConfigurationName": "default",
-            "sourceDataFields": [{"name": field} for field in ("metadata_storage_name", "content")],
+            "sourceDataFields": [{"name": field} for field in ("metadata_storage_name", "content", "sensitivity_label_id")],
         },
     }
     knowledge_base = {

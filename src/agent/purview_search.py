@@ -152,9 +152,18 @@ class PurviewSearch:
             if not isinstance(reference, dict) or reference.get("type") != "searchIndex":
                 continue
             label = reference.get("sensitivityLabelInfo")
-            if not isinstance(label, dict) or not _has_label(label.get("labelId")):
-                continue
             doc = reference.get("sourceData")
+            mapped_label = doc.get(LABEL_FIELD) if isinstance(doc, dict) else None
+            if "sensitivityLabelInfo" in reference:
+                label_id = label.get("labelId") if isinstance(label, dict) else None
+                if not _has_label(label_id) or (
+                    mapped_label is not None
+                    and (not _has_label(mapped_label) or mapped_label.lower() != label_id.lower())
+                ):
+                    continue
+            elif not _has_label(mapped_label):
+                # The IQ preview can return the annotated index field without the reference wrapper.
+                continue
             if not isinstance(doc, dict):
                 raise ProtectedSearchError("Labeled Foundry IQ reference has no source data")
             text = doc.get("content")
