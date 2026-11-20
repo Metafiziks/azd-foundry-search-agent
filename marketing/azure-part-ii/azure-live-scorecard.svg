@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Azure live sample scorecard</title>
+  <desc id="desc">All 12 generated RAG cases completed and the suite passed at 100 percent citation recall, 85.4 percent faithfulness and 33.2 seconds p95 latency. Sample observability was verified. The memory recall case was skipped in this run after a separate required-memory run hit an authentication error.</desc>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#adc6bf" stroke-opacity=".1"/>
+    </pattern>
+    <pattern id="hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <path d="M0 0V12" stroke="#ffb297" stroke-width="3" stroke-opacity=".36"/>
+    </pattern>
+    <style>
+      .mono{font-family:Menlo,'Courier New',monospace;font-weight:700;letter-spacing:2px}
+      .display{font-family:Baskerville,Georgia,serif;font-weight:700}
+      .sans{font-family:'Avenir Next','Helvetica Neue',sans-serif;font-weight:500}
+    </style>
+  </defs>
+  <path d="M0 0h1600v900H0z" fill="#132526"/>
+  <path d="M0 0h1600v900H0z" fill="url(#grid)"/>
+  <path d="M76 78h1448M76 820h1448" stroke="#73968b" stroke-width="2"/>
+  <path d="M76 78h98" stroke="#ebcc77" stroke-width="5"/>
+  <text class="mono" x="76" y="126" font-size="22" fill="#adcebf">FIELD NOTE 02 / SAMPLE MODE</text>
+  <text class="mono" x="1524" y="126" font-size="22" fill="#adcebf" text-anchor="end">LIVE EVAL RUN</text>
+  <text class="display" x="72" y="223" font-size="85" fill="#fcf1da" letter-spacing="-2">What passed. What didn’t.</text>
+  <text class="sans" x="78" y="277" font-size="30" fill="#c6d9cd">Generated questions, unchanged thresholds, no credit for a skipped case.</text>
+  <rect x="76" y="330" width="548" height="311" rx="7" fill="#ebcc77"/>
+  <text class="mono" x="105" y="382" font-size="21" fill="#2f3a2a">GENERATED RAG CASES</text>
+  <text class="display" x="94" y="528" font-size="155" fill="#182a27" letter-spacing="-5">12/12</text>
+  <text class="sans" x="107" y="583" font-size="28" fill="#233a30">Suite passed with memory off</text>
+  <g fill="#344f46">
+    <path d="M109 605h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29z"/>
+  </g>
+  <g class="display" font-size="61" fill="#fcf1da">
+    <text x="654" y="406">100%</text>
+    <text x="654" y="510">85.4%</text>
+    <text x="654" y="616">33.2s</text>
+  </g>
+  <g class="mono" font-size="19" fill="#b4d1c5">
+    <text x="845" y="394">CITATION RECALL</text>
+    <text x="845" y="498">FAITHFULNESS</text>
+    <text x="845" y="604">P95 LATENCY</text>
+  </g>
+  <path d="M653 431h446M653 537h446M1117 330v311" stroke="#58776f" stroke-width="2"/>
+  <text class="mono" x="1148" y="367" font-size="19" fill="#a7e6cb">OBSERVABILITY / VERIFIED</text>
+  <text class="display" x="1146" y="463" font-size="87" fill="#fcf1da">96</text>
+  <text class="sans" x="1151" y="502" font-size="24" fill="#d8e6d9">hosted Search retrievals</text>
+  <text class="sans" x="1151" y="555" font-size="23" fill="#d8e6d9">HHEM scored all 12 answers.</text>
+  <text class="sans" x="1151" y="589" font-size="23" fill="#d8e6d9">Isolation Forest ran on the</text>
+  <text class="sans" x="1151" y="622" font-size="23" fill="#d8e6d9">hosted agent.</text>
+  <rect x="76" y="690" width="1448" height="85" rx="5" fill="#392f2a" stroke="#c27c60"/>
+  <path d="M77 692h24v81H77z" fill="url(#hatch)"/>
+  <text class="mono" x="122" y="741" font-size="20" fill="#ffbda1">MEMORY / SKIPPED</text>
+  <text class="sans" x="452" y="742" font-size="26" fill="#fff0de">Separate required-memory run: Store HTTP 403 → embedding HTTP 401.</text>
+  <text class="mono" x="76" y="860" font-size="18" fill="#adcebf">AZURE / PART II</text>
+  <text class="mono" x="1524" y="860" font-size="18" fill="#adcebf" text-anchor="end">DISPOSABLE DEPLOYMENT / NOV 2026</text>
+</svg>

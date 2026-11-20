@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Purview field test: one question, two identities</title>
+  <desc id="desc">In the protected deployment, Foundry IQ and Azure AI Search returned a cited source for the allowed identity and no documents for the denied identity. An unlabeled control did not appear in the answer.</desc>
+  <defs>
+    <pattern id="paper" width="36" height="36" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#45645c" opacity=".2"/>
+    </pattern>
+    <style>
+      .mono{font-family:Menlo,'Courier New',monospace;font-weight:700;letter-spacing:2px}
+      .display{font-family:Baskerville,Georgia,serif;font-weight:700}
+      .sans{font-family:'Avenir Next','Helvetica Neue',sans-serif;font-weight:500}
+    </style>
+  </defs>
+  <path d="M0 0h1600v900H0z" fill="#f7eed9"/>
+  <path d="M0 0h1600v900H0z" fill="url(#paper)"/>
+  <path d="M76 78h1448M76 820h1448" stroke="#496961" stroke-width="2"/>
+  <path d="M76 78h98" stroke="#925236" stroke-width="5"/>
+  <text class="mono" x="76" y="126" font-size="22" fill="#31564f">FIELD NOTE 01 / PROTECTED MODE</text>
+  <text class="mono" x="1524" y="126" font-size="22" fill="#31564f" text-anchor="end">LIVE ACCEPTANCE TEST</text>
+  <text class="display" x="72" y="223" font-size="85" fill="#152728" letter-spacing="-2">One question. Two identities.</text>
+  <text class="sans" x="78" y="279" font-size="30" fill="#31564f">Foundry IQ + Azure AI Search retrieve under the signed-in user’s permissions.</text>
+  <g class="mono" font-size="20" fill="#36584f">
+    <text x="76" y="367">01 / QUERY</text>
+    <text x="632" y="367">02 / CALLER</text>
+    <text x="1067" y="367">03 / HOSTED RESPONSE</text>
+  </g>
+  <path d="M448 526h84V454h80M532 526v80h80" fill="none" stroke="#31564f" stroke-width="3"/>
+  <path d="m611 448 11 6-11 6zm0 152 11 6-11 6z" fill="#31564f"/>
+  <path d="M957 454h88" stroke="#2f6253" stroke-width="4"/>
+  <path d="m1044 448 11 6-11 6z" fill="#2f6253"/>
+  <path d="M957 606h88" stroke="#925236" stroke-width="4" stroke-dasharray="9 7"/>
+  <path d="m1044 600 11 6-11 6z" fill="#925236"/>
+  <circle cx="532" cy="526" r="7" fill="#925236"/>
+  <rect x="76" y="426" width="372" height="200" rx="6" fill="#182c2c"/>
+  <text class="mono" x="104" y="474" font-size="19" fill="#ebcc77">ILLUSTRATIVE QUERY</text>
+  <text class="display" x="103" y="529" font-size="43" fill="#fcf1da">“What’s the</text>
+  <text class="display" x="103" y="576" font-size="43" fill="#fcf1da">procedure?”</text>
+  <rect x="632" y="398" width="325" height="112" rx="6" fill="#d9e8d7" stroke="#528272" stroke-width="2"/>
+  <rect x="632" y="550" width="325" height="112" rx="6" fill="#f1ddcb" stroke="#a16b4d" stroke-width="2"/>
+  <g class="sans" font-size="30" fill="#152728">
+    <text x="660" y="444">Allowed test user</text>
+    <text x="660" y="596">Denied test user</text>
+  </g>
+  <g class="mono" font-size="17">
+    <text x="660" y="480" fill="#31564f">LABEL GRANTS ACCESS</text>
+    <text x="660" y="632" fill="#804528">NO PERMISSION GRANT</text>
+  </g>
+  <rect x="1067" y="398" width="457" height="112" rx="6" fill="#204839"/>
+  <rect x="1067" y="550" width="457" height="112" rx="6" fill="#673f32"/>
+  <g class="mono" font-size="17">
+    <text x="1096" y="436" fill="#bce6c7">HTTP 200 / COMPLETED</text>
+    <text x="1096" y="588" fill="#ffe0bf">HTTP 200 / COMPLETED</text>
+  </g>
+  <g class="sans" font-size="31" fill="#fcf1da">
+    <text x="1096" y="480">Test fact + cited document</text>
+    <text x="1096" y="632">No documents returned</text>
+  </g>
+  <rect x="76" y="719" width="1448" height="58" fill="#e7d5ad"/>
+  <text class="mono" x="102" y="756" font-size="18" fill="#563d28">CONTROL</text>
+  <text class="sans" x="247" y="756" font-size="24" fill="#283f36">Unlabeled document not disclosed. No fallback to a less restricted index.</text>
+  <text class="mono" x="76" y="860" font-size="18" fill="#31564f">AZURE / PART II</text>
+  <text class="mono" x="1524" y="860" font-size="18" fill="#31564f" text-anchor="end">QUERY-TIME PROOF, NOT ENCRYPTION PROOF</text>
+</svg>
