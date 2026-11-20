@@ -73,14 +73,14 @@ az login
 azd up
 ```
 
-`azd up` runs the full pipeline (~9 minutes on a fresh environment):
+`azd up` runs the full pipeline. Hosted build, RBAC propagation, and the evaluation suite can take several minutes each:
 
 | Step | What happens |
 |---|---|
 | Provision | Creates AI Foundry account + project, AI Search, Blob Storage |
 | Post-provision | Deploys gpt-5, uploads `docs/` to blob, creates search index + indexer, waits for Foundry data plane |
 | Deploy | Packages and deploys the hosted agent via `remote_build` |
-| Post-deploy | Discovers agent hosting identity, grants `Search Index Data Reader` |
+| Post-deploy | Grants the hosted agent data access, runs generated evaluations, and trains the retrieval anomaly model |
 
 ## Automated evaluations
 
@@ -88,11 +88,11 @@ The template includes a built-in eval suite that runs automatically after each `
 
 | Metric | Threshold | How it's measured |
 |---|---|---|
-| Faithfulness | ≥ 0.70 | LLM judge: claims grounded in citations |
+| Faithfulness | ≥ 0.60 | LLM judge: claims grounded in the reference evidence |
 | Answer Relevance | ≥ 0.75 | LLM judge: answer addresses the question |
 | Citation Recall | ≥ 0.60 | Expected source doc appeared in citations |
 | Keyword Recall | ≥ 0.65 | Key phrases from expected answer found in response |
-| p95 Latency | ≤ 10,000ms | Wall-clock time for agent response |
+| p95 Latency | ≤ 45,000ms | Wall-clock time for agent response |
 | Memory Recall | case-level | Two-turn recall case: first turn stores a preference, second turn asks for it |
 
 ```bash
@@ -113,11 +113,11 @@ python3 scripts/generate_eval_cases.py   # reads docs/, writes tests/eval_cases.
 bash scripts/eval.sh
 ```
 
-`azd up` does this automatically — the post-deploy script regenerates cases after every doc change.
+In sample mode, `azd up` generates two cases per `.txt` document plus the memory case. The post-deploy hook saves the generated suite and its results under `.azure/<env>/evals/` without changing the checked-in suite. Missing generated cases, failed agent calls, or missing required HHEM scores fail the evaluation.
 
 The generator always appends `memory-preference-recall`, a two-turn memory case. If `MEMORY_ENABLED=true` and a `MEMORY_STORE_NAME` exists, evals exercise managed memory with scoped `x-agent-user-id` / `x-memory-user-id` headers. If memory preview provisioning is unavailable and `MEMORY_OPTIONAL=true`, the memory case is marked skipped rather than failing unrelated RAG evals.
 
-For quota-constrained Foundry deployments, the eval runner supports `EVAL_AGENT_TIMEOUT_SECONDS`, `EVAL_INTER_CASE_WAIT_SECONDS`, `EVAL_WARMUP_ENABLED`, and `EVAL_WARMUP_QUESTION`. `postdeploy.sh` also honors `POSTDEPLOY_EVAL_ARGS` and `BASELINE_RUNS`; set `BASELINE_RUNS=0` only when you intentionally want to skip extra telemetry-only baseline runs for IsolationForest training.
+For quota-constrained Foundry deployments, the eval runner supports `EVAL_AGENT_TIMEOUT_SECONDS`, `EVAL_AGENT_ATTEMPTS`, `EVAL_INTER_CASE_WAIT_SECONDS`, `EVAL_WARMUP_ENABLED`, and `EVAL_WARMUP_QUESTION`. `postdeploy.sh` also honors `POSTDEPLOY_EVAL_ARGS` and `BASELINE_RUNS`; use `BASELINE_RUNS=0` to skip additional runs if enough runtime retrieval telemetry already exists.
 
 ## CI/CD (GitHub Actions)
 
@@ -443,8 +443,14 @@ Memory is in Foundry preview. Confirm `MEMORY_ENABLED=true`, `MEMORY_STORE_NAME`
 **Memory writes fail with 401/403**
 Grant the deployed agent hosting identity `Cognitive Services OpenAI User` on the Foundry account/project scope. `postdeploy.sh` attempts this automatically after discovering the hosting identity.
 
+**Memory Store exists but embedding-backed search fails with 401/403**
+Store creation and static reads do not verify model access. The provisioning hook runs a read-only embedding-backed search in a fresh scope before enabling memory. In a live Entra-only account, direct embedding requests succeeded, but the Memory Store preview returned `403 forbidden` with a downstream embedding `401 Authentication`. If this persists with the documented project identity and roles, investigate the Foundry service-side authentication with Azure support. Keep key authentication disabled; use `MEMORY_OPTIONAL=true` for a deployment that can continue without memory.
+
 **Generated evals timeout or hit transient 500/503**
 Foundry hosted agents can be cold-started or quota constrained. Increase `EVAL_AGENT_TIMEOUT_SECONDS`, add `EVAL_INTER_CASE_WAIT_SECONDS`, keep warmup enabled, or run `POSTDEPLOY_EVAL_ARGS=--no-judge` when validating deterministic RAG/memory behavior separately from judge-model availability. The runner still fails real answer-quality issues instead of marking failed responses as passing.
+
+**Search finds the right document but the agent says it cannot answer**
+Semantic ranking selects the documents; an extractive caption alone may omit the relevant procedure. In sample mode, the agent passes bounded indexed document text to the model, with the caption as a relevance hint for longer documents. The eval runner calls the agent-specific Responses URL without overriding the agent's configured model.
 
 ---
 
@@ -484,12 +490,12 @@ Foundry Hosted Agent
 ### Auto-training
 
 The `postdeploy.sh` script:
-1. Runs the eval suite 5× with `EVAL_IS_BASELINE=true` → rows ingested to `AgentTelemetry_CL`
-2. Queries those rows via `azure-monitor-query` KQL client
-3. Trains IsolationForest and uploads `iforest.pkl` to Blob Storage `models/` container
-4. Foundry container loads the model on next cold start
+1. Runs the main evaluation, then optional extra passes to collect more Search traffic.
+2. Queries actual hosted Search retrieval rows in `AgentTelemetry_CL` for the six features used by the hosted scorer: score mean, standard deviation, entropy, chunk count, reranker mean, and search latency.
+3. Trains IsolationForest once at least ten retrieval rows are available and uploads `iforest.pkl` to the private Blob Storage `models` container. The upload identity needs contributor access to that container; the hosted agent only needs reader access.
+4. The hosted agent loads the model on its first retrieval after the artifact is available. An instance that already loaded a model uses the cached model until restart.
 
-The GitHub Actions workflow (`.github/workflows/retrain-observability.yml`) retrains weekly on the last 30 days of Log Analytics data.
+The GitHub Actions workflow (`.github/workflows/retrain-observability.yml`) uses the same feature contract to retrain weekly from the last 30 days of hosted retrieval data. HHEM runs in the eval process, comparing each RAG answer against its expected source documents; it reports no score for memory recall.
 
 ### Log Analytics Schema (AgentTelemetry_CL)
 

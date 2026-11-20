@@ -2,9 +2,11 @@
 set -euo pipefail
 
 KB_ACCESS_MODE="${KB_ACCESS_MODE:-sample}"
+if [ -n "${AZURE_SUBSCRIPTION_ID:-}" ]; then
+  az() { command az "$@" --subscription "$AZURE_SUBSCRIPTION_ID"; }
+fi
 case "$KB_ACCESS_MODE" in
-  purview) az() { command az "$@" --subscription "$AZURE_SUBSCRIPTION_ID"; } ;;
-  sample) ;;
+  purview|sample) ;;
   *) echo "KB_ACCESS_MODE must be 'sample' or 'purview'." >&2; exit 1 ;;
 esac
 
@@ -34,16 +36,15 @@ echo "► Locating agent hosting identity..."
 COG_ACCOUNT=$(az cognitiveservices account list   --resource-group "$RG"   --query "[0].name" -o tsv 2>/dev/null || true)
 
 AGENT_IDENTITY_NAME="${COG_ACCOUNT}-${AZURE_ENV_NAME}-search-agent-AgentIdentity"
+DEPLOYMENT_TENANT=$(az account show --query tenantId -o tsv)
+GRAPH=(python3 "$(dirname "$0")/purview_graph.py" --subscription "$AZURE_SUBSCRIPTION_ID" --tenant "$DEPLOYMENT_TENANT")
 
 if [ "$KB_ACCESS_MODE" = "purview" ]; then
   : "${PURVIEW_SEARCH_INDEX:?Run azd provision to create the protected index}"
   : "${COG_ACCOUNT:?Could not find the deployed Foundry account}"
   echo "  Looking for: ${AGENT_IDENTITY_NAME}"
-  DEPLOYMENT_TENANT=$(az account show --query tenantId -o tsv)
-  : "${DEPLOYMENT_TENANT:?Expected Azure CLI tenant ID for the protected subscription}"
   for attempt in 1 2 3 4 5 6; do
-    HOSTING_OID=$(python3 "$(dirname "$0")/purview_graph.py" --subscription "$AZURE_SUBSCRIPTION_ID" \
-      --tenant "$DEPLOYMENT_TENANT" --display-name "$AGENT_IDENTITY_NAME")
+    HOSTING_OID=$("${GRAPH[@]}" --display-name "$AGENT_IDENTITY_NAME")
     if [ -n "$HOSTING_OID" ]; then break; fi
     if [ "$attempt" -lt 6 ]; then sleep 10; fi
   done
@@ -72,7 +73,11 @@ fi
 HOSTING_OID=""
 if [ -n "$COG_ACCOUNT" ]; then
   echo "  Looking for: ${AGENT_IDENTITY_NAME}"
-  HOSTING_OID=$(az ad sp list     --display-name "$AGENT_IDENTITY_NAME"     --query "[0].id" -o tsv 2>/dev/null || true)
+  for attempt in 1 2 3 4 5 6; do
+    HOSTING_OID=$("${GRAPH[@]}" --display-name "$AGENT_IDENTITY_NAME")
+    if [ -n "$HOSTING_OID" ]; then break; fi
+    if [ "$attempt" -lt 6 ]; then sleep 10; fi
+  done
 fi
 
 # Fallback: invoke the agent and scan recent logs for the OID
@@ -87,10 +92,11 @@ if [ -z "$HOSTING_OID" ]; then
   HOSTING_OID=$(echo "$LOGS" | grep "IDENTITY OID"     | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'     | head -1 || true)
 fi
 
-if [ -n "$HOSTING_OID" ]; then
+if [[ "$HOSTING_OID" =~ ^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$ ]]; then
   echo "  Hosting identity: ${HOSTING_OID}"
   echo "► Granting Search Index Data Reader..."
-  az role assignment create     --assignee "$HOSTING_OID"     --role "Search Index Data Reader"     --scope "$SEARCH_RESOURCE_ID"     --output none 2>/dev/null     && echo "  ✓ Permission granted"     || echo "  (role already assigned)"
+  az role assignment create --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
+    --role "Search Index Data Reader" --scope "$SEARCH_RESOURCE_ID" --output none
   COG_RESOURCE_ID=$(az cognitiveservices account show \
     --name "$COG_ACCOUNT" --resource-group "$RG" \
     --query id -o tsv 2>/dev/null || true)
@@ -99,13 +105,13 @@ if [ -n "$HOSTING_OID" ]; then
     for ROLE_SCOPE in "$COG_RESOURCE_ID" "$PROJECT_RESOURCE_ID"; do
       echo "► Granting Foundry User for memory store read/write access on ${ROLE_SCOPE##*/}..."
       if az role assignment create \
-        --assignee "$HOSTING_OID" \
+        --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
         --role "Foundry User" \
         --scope "$ROLE_SCOPE" \
         --output none 2>/dev/null; then
         echo "  ✓ Foundry User role granted"
       elif az role assignment create \
-          --assignee "$HOSTING_OID" \
+          --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
           --role "Azure AI User" \
           --scope "$ROLE_SCOPE" \
           --output none 2>/dev/null; then
@@ -116,7 +122,7 @@ if [ -n "$HOSTING_OID" ]; then
 
       echo "► Granting Cognitive Services OpenAI User for memory store access on ${ROLE_SCOPE##*/}..."
       az role assignment create \
-        --assignee "$HOSTING_OID" \
+        --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
         --role "Cognitive Services OpenAI User" \
         --scope "$ROLE_SCOPE" \
         --output none 2>/dev/null \
@@ -124,27 +130,40 @@ if [ -n "$HOSTING_OID" ]; then
         || echo "  (OpenAI role already assigned)"
     done
   fi
-  DCR_RESOURCE_ID=$(az monitor data-collection rule show \
-    --name "${SAFE}-dcr" --resource-group "$RG" \
-    --query id -o tsv 2>/dev/null || true)
-  if [ -n "$DCR_RESOURCE_ID" ]; then
-    echo "► Granting Monitoring Metrics Publisher for telemetry ingestion..."
-    az role assignment create \
-      --assignee "$HOSTING_OID" \
-      --role "Monitoring Metrics Publisher" \
-      --scope "$DCR_RESOURCE_ID" \
-      --output none 2>/dev/null \
-      && echo "  ✓ Telemetry ingestion role granted" \
-      || echo "  (telemetry role already assigned)"
+  DCR_RESOURCE_ID=$(az resource show --resource-type Microsoft.Insights/dataCollectionRules \
+    --name "${SAFE}-dcr" --resource-group "$RG" --query id -o tsv)
+  STORAGE_NAME=$(echo "$AZURE_ENV_NAME" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]' | cut -c1-20)docs
+  MODEL_SCOPE="$(az storage account show -n "$STORAGE_NAME" -g "$RG" --query id -o tsv)/blobServices/default/containers/models"
+  echo "► Granting telemetry and model artifact access..."
+  CALLER_TYPE=$(az account show --query user.type -o tsv)
+  case "$CALLER_TYPE" in
+    user) CALLER_OID=$("${GRAPH[@]}"); CALLER_TYPE=User ;;
+    servicePrincipal)
+      CALLER_OID=$("${GRAPH[@]}" --app-id "$(az account show --query user.name -o tsv)")
+      CALLER_TYPE=ServicePrincipal ;;
+    *) echo "Unsupported deployment identity type: $CALLER_TYPE" >&2; exit 1 ;;
+  esac
+  if ! [[ "$CALLER_OID" =~ ^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$ ]]; then
+    echo "Expected exactly one deployment principal for telemetry and model training." >&2
+    exit 1
   fi
+  az role assignment create --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
+    --role "Monitoring Metrics Publisher" --scope "$DCR_RESOURCE_ID" --output none
+  az role assignment create --assignee-object-id "$CALLER_OID" --assignee-principal-type "$CALLER_TYPE" \
+    --role "Monitoring Metrics Publisher" --scope "$DCR_RESOURCE_ID" --output none
+  az role assignment create --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
+    --role "Storage Blob Data Reader" --scope "$MODEL_SCOPE" --output none
+  az role assignment create --assignee-object-id "$CALLER_OID" --assignee-principal-type "$CALLER_TYPE" \
+    --role "Storage Blob Data Contributor" --scope "$MODEL_SCOPE" --output none
 else
   echo ""
-  echo "⚠  Could not auto-detect hosting identity OID."
+  echo "ERROR: Could not identify the hosting principal for Search, telemetry, and model access." >&2
   echo "   Grant the role manually after running the agent once:"
   echo ""
   echo "     OID=\$(azd ai agent monitor search-agent --tail 50 2>&1 | grep 'IDENTITY OID' | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)"
   echo "     az role assignment create --assignee \"\$OID\" --role 'Search Index Data Reader' --scope ${SEARCH_RESOURCE_ID}"
   echo ""
+  exit 1
 fi
 
 # RBAC assignments propagate globally over 2–10 minutes.
@@ -159,9 +178,15 @@ echo ""
 echo "► Generating eval cases from docs/..."
 VENV_EVAL="${HOME}/.azd-eval-venv"
 [ -f "${VENV_EVAL}/bin/python3" ] || python3 -m venv "${VENV_EVAL}"
-"${VENV_EVAL}/bin/pip" install azure-identity -q
+"${VENV_EVAL}/bin/pip" install -q azure-identity azure-monitor-ingestion
+if [ "${SKIP_HHEM:-false}" != "true" ]; then
+  "${VENV_EVAL}/bin/pip" install -q 'transformers>=4.51,<5' 'torch>=2.6'
+fi
 
 # azd supplies environment values to this hook; the eval scripts use them directly.
+EVAL_DIR="${POSTDEPLOY_EVAL_DIR:-$(dirname "$(dirname "$0")")/.azure/${AZURE_ENV_NAME:?}/evals}"
+mkdir -p "$EVAL_DIR"
+GENERATED_CASES="$EVAL_DIR/generated-cases.json"
 
 FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
 AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-}" \
@@ -170,11 +195,12 @@ MEMORY_ENABLED="${MEMORY_ENABLED:-false}" \
 MEMORY_STORE_NAME="${MEMORY_STORE_NAME:-}" \
 MEMORY_SCOPE="${MEMORY_SCOPE:-}" \
 MEMORY_UPDATE_DELAY_SECONDS="${MEMORY_UPDATE_DELAY_SECONDS:-5}" \
-  "${VENV_EVAL}/bin/python3" "$(dirname "$0")/generate_eval_cases.py" || true
+  "${VENV_EVAL}/bin/python3" "$(dirname "$0")/generate_eval_cases.py" --output "$GENERATED_CASES"
 echo ""
 
 echo "► Running automated evaluations..."
 POSTDEPLOY_EVAL_ARGS="${POSTDEPLOY_EVAL_ARGS:-}"
+EVAL_STATUS=0
 FOUNDRY_PROJECT_ENDPOINT="${FOUNDRY_PROJECT_ENDPOINT:-}" \
 AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-}" \
 AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-gpt-5}" \
@@ -189,7 +215,8 @@ EVAL_INTER_CASE_WAIT_SECONDS="${EVAL_INTER_CASE_WAIT_SECONDS:-60}" \
 EVAL_AGENT_TIMEOUT_SECONDS="${EVAL_AGENT_TIMEOUT_SECONDS:-420}" \
 SKIP_HHEM="${SKIP_HHEM:-false}" \
   "${VENV_EVAL}/bin/python3" "$(dirname "$0")/run_evals.py" \
-    --output "$(dirname "$(dirname "$0")")/eval_results.json" ${POSTDEPLOY_EVAL_ARGS} || true
+    --cases "$GENERATED_CASES" --output "$EVAL_DIR/results.json" \
+    ${POSTDEPLOY_EVAL_ARGS} || EVAL_STATUS=$?
 echo ""
 
 # --- Bootstrap IsolationForest with 5× eval baseline runs ---
@@ -213,36 +240,36 @@ if [ "$BASELINE_RUNS" -gt 0 ]; then
     EVAL_INTER_CASE_WAIT_SECONDS="${EVAL_INTER_CASE_WAIT_SECONDS:-60}" \
     EVAL_AGENT_TIMEOUT_SECONDS="${EVAL_AGENT_TIMEOUT_SECONDS:-420}" \
     SKIP_HHEM=true \
-      "${VENV_EVAL}/bin/python3" "$(dirname "$0")/run_evals.py" --no-judge \
-        --output "/tmp/baseline_run_${BASELINE_RUN}.json" 2>/dev/null || true
-    BASELINE_COUNT=$((BASELINE_COUNT + 1))
+      "${VENV_EVAL}/bin/python3" "$(dirname "$0")/run_evals.py" --no-judge --cases "$GENERATED_CASES" \
+        --output "$EVAL_DIR/baseline-${BASELINE_RUN}.json" \
+      && BASELINE_COUNT=$((BASELINE_COUNT + 1))
   done
 fi
-echo "  ✓ ${BASELINE_COUNT} baseline runs completed — telemetry ingested to Log Analytics"
+echo "  ${BASELINE_COUNT}/${BASELINE_RUNS} additional baseline eval runs passed"
 echo ""
 
-# Wait a moment for LA ingestion latency before training
-sleep 30
-
-# Train IsolationForest on the baseline telemetry
+# Train IsolationForest on runtime retrieval telemetry
 echo "► Training IsolationForest anomaly model..."
-BLOB_ACCOUNT_URL_VAL=$(az storage account show \
-  --name "${STORAGE_NAME}" --resource-group "${AZURE_RESOURCE_GROUP:-}" \
-  --query primaryEndpoints.blob -o tsv 2>/dev/null | sed 's|/$||' || true)
-
-if [ -n "${BLOB_ACCOUNT_URL_VAL}" ]; then
+TRAIN_STATUS=0
+if [ -n "${BLOB_ACCOUNT_URL:-}" ]; then
   "${VENV_EVAL}/bin/pip" install scikit-learn numpy azure-monitor-query azure-storage-blob azure-identity -q
   LOG_ANALYTICS_WORKSPACE_ID="${LOG_ANALYTICS_WORKSPACE_ID:-}" \
-  BLOB_ACCOUNT_URL="${BLOB_ACCOUNT_URL_VAL}" \
+  BLOB_ACCOUNT_URL="${BLOB_ACCOUNT_URL}" \
   BLOB_MODEL_CONTAINER="models" \
   BLOB_MODEL_KEY="iforest.pkl" \
   MIN_BASELINE_ROWS=10 \
-    "${VENV_EVAL}/bin/python3" "$(dirname "$(dirname "$0")")/observability/train_baseline.py" || \
-    echo "  ⚠ IForest training deferred — will retry on first weekly retrain"
+  BASELINE_INGEST_WAIT_SECONDS="${BASELINE_INGEST_WAIT_SECONDS:-120}" \
+    "${VENV_EVAL}/bin/python3" "$(dirname "$(dirname "$0")")/observability/train_baseline.py" || TRAIN_STATUS=$?
 else
-  echo "  ⚠ Could not resolve storage account URL — IForest training skipped"
+  echo "ERROR: BLOB_ACCOUNT_URL is missing; cannot train and upload IsolationForest." >&2
+  TRAIN_STATUS=1
 fi
 echo ""
+
+if [ "$EVAL_STATUS" -ne 0 ] || [ "$TRAIN_STATUS" -ne 0 ]; then
+  echo "Post-deploy validation failed: eval=$EVAL_STATUS training=$TRAIN_STATUS" >&2
+  exit 1
+fi
 
 echo ""
 echo "=== Post-Deploy Complete ==="

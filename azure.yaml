@@ -44,6 +44,8 @@ services:
               value: ${LOG_ANALYTICS_DCR_IMMUTABLE_ID}
             - name: LOG_ANALYTICS_STREAM_NAME
               value: ${LOG_ANALYTICS_STREAM_NAME}
+            - name: BLOB_ACCOUNT_URL
+              value: ${BLOB_ACCOUNT_URL}
             - name: MEMORY_ENABLED
               value: ${MEMORY_ENABLED}
             - name: MEMORY_OPTIONAL

@@ -20,6 +20,7 @@ from azure.search.documents.models import QueryType
 import iforest_scorer
 import log_analytics_sink
 from memory_provider import build_memory_provider, memory_enabled_from_env
+from search_evidence import format_search_result
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -149,29 +150,7 @@ def search_knowledge_base(query: str) -> str:
         is_anomaly=is_anomaly,
     )
 
-    # ── Build excerpts from top-5 semantically ranked results ─────────────────
-    excerpts = []
-    for r in results[:5]:
-        # Prefer semantic captions (extractive highlights) over raw content
-        captions = r.get("@search.captions") or []
-        text = " ".join(c.text for c in captions if c.text) if captions else ""
-        if not text:
-            text = (
-                r.get("content") or r.get("snippet") or r.get("chunk") or r.get("text")
-                or next((v for v in r.values() if isinstance(v, str) and len(v) > 50), None)
-                or str(r)
-            )
-        source_url  = r.get("source_url") or r.get("metadata_storage_path") or ""
-        source_name = r.get("metadata_storage_name") or ""
-        if source_url and source_name:
-            header = f"[{source_name}]({source_url})"
-        elif source_name:
-            header = f"[{source_name}]"
-        else:
-            header = ""
-        excerpts.append(f"{header}\n{text}" if header else text)
-
-    return "\n\n---\n\n".join(excerpts)
+    return "\n\n---\n\n".join(format_search_result(result) for result in results[:5])
 
 
 async def main() -> None:
