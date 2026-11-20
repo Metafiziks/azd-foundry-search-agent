@@ -97,6 +97,49 @@ def index_uploaded_files(endpoint, index, token, minimum, timeout, show_details=
     raise TimeoutError("Timed out waiting for a fresh Foundry IQ indexer execution")
 
 
+def ingest(args, root, files):
+    endpoint = f"https://{args.search_service}.search.windows.net"
+    token = search_token(args.subscription)
+    # Refuse to upload private files unless the configured indexer actually targets this private corpus.
+    indexer = json.loads(request(
+        "GET", f"{endpoint}/indexers/{args.index}-indexer?api-version={SEARCH_API_VERSION}", token,
+    ))
+    source = json.loads(request(
+        "GET", f"{endpoint}/datasources/{args.index}-blob?api-version={SEARCH_API_VERSION}", token,
+    ))
+    index = json.loads(request("GET", f"{endpoint}/indexes/{args.index}?api-version={SEARCH_API_VERSION}", token))
+    account = json.loads(subprocess.check_output([
+        "az", "storage", "account", "show", "--subscription", args.subscription,
+        "--name", args.storage_account, "--output", "json", "--only-show-errors",
+    ]))
+    if not matches_corpus(source, indexer, index, account, args.index):
+        raise RuntimeError("The protected indexer and private storage account do not match. Run azd up to configure them.")
+    for path in files:
+        subprocess.run([
+            "az", "storage", "blob", "upload", "--subscription", args.subscription,
+            "--auth-mode", "login", "--account-name", args.storage_account,
+            "--container-name", "docs", "--name", path.relative_to(root).as_posix(),
+            "--file", str(path), "--overwrite", "true", "--only-show-errors", "--output", "none",
+        ], check=True)
+    count = index_uploaded_files(
+        endpoint, args.index, token, len(files), args.timeout, show_details=args.show_indexer_error,
+    )
+    print(f"Uploaded {len(files)} documents; the fresh indexer run processed {count} items.")
+
+
+def validate_ingest_args(parser, args):
+    for name, value, pattern in (
+        ("subscription", args.subscription, r"[a-fA-F0-9-]{36}"),
+        ("search service", args.search_service, r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]"),
+        ("index", args.index, r"[a-z0-9][a-z0-9-]{0,99}"),
+        ("storage account", args.storage_account, r"[a-z0-9]{3,24}"),
+    ):
+        if not value or not re.fullmatch(pattern, value):
+            parser.error(f"Invalid {name}")
+    if args.timeout < 10:
+        parser.error("--timeout must be at least 10 seconds")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--subscription", required=True)
@@ -108,45 +151,9 @@ def main():
     parser.add_argument("--show-indexer-error", action="store_true",
                         help="Show the indexer's run-level diagnostic locally (can include corpus names)")
     args = parser.parse_args()
-    for name, value, pattern in (
-        ("subscription", args.subscription, r"[a-fA-F0-9-]{36}"),
-        ("search service", args.search_service, r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]"),
-        ("index", args.index, r"[a-z0-9][a-z0-9-]{0,99}"),
-        ("storage account", args.storage_account, r"[a-z0-9]{3,24}"),
-    ):
-        if not re.fullmatch(pattern, value):
-            parser.error(f"Invalid {name}")
-    if args.timeout < 10:
-        parser.error("--timeout must be at least 10 seconds")
-
-    endpoint = f"https://{args.search_service}.search.windows.net"
+    validate_ingest_args(parser, args)
     try:
-        root, files = corpus_files(args.directory)
-        token = search_token(args.subscription)
-        # Refuse to upload private files unless the configured indexer actually targets this private corpus.
-        indexer = json.loads(request(
-            "GET", f"{endpoint}/indexers/{args.index}-indexer?api-version={SEARCH_API_VERSION}", token,
-        ))
-        source = json.loads(request(
-            "GET", f"{endpoint}/datasources/{args.index}-blob?api-version={SEARCH_API_VERSION}", token,
-        ))
-        index = json.loads(request("GET", f"{endpoint}/indexes/{args.index}?api-version={SEARCH_API_VERSION}", token))
-        account = json.loads(subprocess.check_output([
-            "az", "storage", "account", "show", "--subscription", args.subscription,
-            "--name", args.storage_account, "--output", "json", "--only-show-errors",
-        ]))
-        if not matches_corpus(source, indexer, index, account, args.index):
-            raise RuntimeError("The protected indexer and private storage account do not match. Run azd up to configure them.")
-        for path in files:
-            subprocess.run([
-                "az", "storage", "blob", "upload", "--subscription", args.subscription,
-                "--auth-mode", "login", "--account-name", args.storage_account,
-                "--container-name", "docs", "--name", path.relative_to(root).as_posix(),
-                "--file", str(path), "--overwrite", "true", "--only-show-errors", "--output", "none",
-            ], check=True)
-        count = index_uploaded_files(
-            endpoint, args.index, token, len(files), args.timeout, show_details=args.show_indexer_error,
-        )
+        ingest(args, *corpus_files(args.directory))
     except HTTPError as exc:
         raise SystemExit(f"Foundry IQ ingestion failed: HTTP {exc.code}") from None
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
@@ -155,7 +162,6 @@ def main():
         if isinstance(exc, subprocess.CalledProcessError):
             raise SystemExit("Azure CLI failed during protected ingestion") from None
         raise SystemExit(str(exc)) from None
-    print(f"Uploaded {len(files)} documents; the fresh indexer run processed {count} items.")
     print("Verify per-user label enforcement with the live acceptance test before routing traffic.")
 
 

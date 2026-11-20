@@ -61,7 +61,17 @@ PY
     --role "Reader" --scope "$SEARCH_RESOURCE_ID" --output none
   az role assignment create --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
     --role "Search Index Data Reader" --scope "$SEARCH_RESOURCE_ID" --output none
-  echo "Foundry IQ read access granted on the dedicated protected Search service. Run live acceptance after ingestion."
+  echo "Foundry IQ read access granted on the dedicated protected Search service."
+  if [ -n "${PURVIEW_ACCEPTANCE_CONFIG:-}" ]; then
+    : "${PURVIEW_STORAGE_ACCOUNT:?Run azd provision to create the protected Blob account}"
+    echo "► Running the required Purview ingestion and two-user acceptance gate..."
+    python3 "$(dirname "$0")/test_purview_live.py" \
+      --config "$PURVIEW_ACCEPTANCE_CONFIG" --account "$COG_ACCOUNT" --project "$AZURE_ENV_NAME" \
+      --subscription "$AZURE_SUBSCRIPTION_ID" --search-service "${SEARCH_RESOURCE_ID##*/}" \
+      --index "$PURVIEW_SEARCH_INDEX" --storage-account "$PURVIEW_STORAGE_ACCOUNT"
+  else
+    echo "Purview live acceptance not configured. Do not route traffic until it passes."
+  fi
   exit 0
 fi
 

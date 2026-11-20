@@ -191,6 +191,9 @@ make access decisions.
    azd up --no-prompt
    ```
 
+   For an interactive deployment with the acceptance gate below, use
+   `azd provision` instead of `azd up` for this first step.
+
    The hooks create dedicated Search and Storage resources in the environment's
    resource group. Search uses its system-assigned identity and RBAC, not API
    keys. The `docs` Blob container has no anonymous or shared-key access; Blob
@@ -247,12 +250,50 @@ or previous response. The backend should check the HTTP and Responses
 statuses, and must not cache protected results or replay previous answers into
 later requests. The agent returns source filenames, not Blob URLs.
 
-**Verify before rollout.** Confirm the tenant has eligible Purview licensing
-and a published label that restricts extraction before provisioning a test
-environment. Ingest two synthetic fixtures with different test facts: a
-labeled Office document readable only by the approved test user and an
-unlabeled control. Use distinct same-tenant identities. With `httpx` installed
-(included in the agent requirements), run the check from a terminal:
+**Verify during deployment.** In a fresh Purview test environment, use a
+dedicated local directory containing only two synthetic fixtures: a restricted
+Office document and an unlabeled control with a different fact. Save this
+non-secret JSON outside the checkout; do not put access tokens in it:
+
+```json
+{
+  "directory": "/absolute/path/to/synthetic-fixtures",
+  "allowed_oid": "<approved-user-object-id>",
+  "denied_oid": "<denied-user-object-id>",
+  "labeled_blob": "approved.docx",
+  "unlabeled_blob": "control.docx",
+  "question": "What is the restricted test access code?",
+  "expected": "ORCHID-47",
+  "unlabeled_question": "What is the unlabeled control code?",
+  "unlabeled_expected": "MAPLE-82"
+}
+```
+
+Run initial provisioning so the tenant admin can approve the **Search**
+managed identity. Grant the CLI ingest operator the Blob and Search roles
+listed above. From an interactive terminal with `httpx` installed for
+`python3` (for example, in an active virtual environment), set the gate and
+deploy:
+
+```bash
+azd env set PURVIEW_ACCEPTANCE_CONFIG /absolute/path/to/purview-acceptance.json
+azd up
+```
+
+The post-deploy hook uploads the two files, requires a fresh successful indexer
+run, then prompts without echo for the trusted backend Foundry token and the
+two users' delegated Search tokens. It fails the deployment command unless the
+agent cites the restricted file and returns the fact for the approved user,
+returns a completed no-document response for the denied user, and does not
+reveal or cite the unlabeled control. It also checks missing delegation,
+stateful requests, and anonymous Blob access. The gate verifies **retrieval
+permissions**, not whether the downloaded file itself is encrypted at rest.
+It does not automatically roll back; tear down a failed test environment
+with the command below. With no config, protected `azd up` provisions only;
+sample-mode behavior is unchanged.
+
+**Run acceptance separately.** To check a deployed agent after manual corpus
+ingestion, including the expired-token case, run from a terminal:
 
 ```bash
 python3 scripts/test_purview_live.py \
