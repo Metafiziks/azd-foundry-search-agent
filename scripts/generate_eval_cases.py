@@ -122,7 +122,7 @@ def get_token() -> str:
 
 def chat_complete(prompt: str) -> str:
     """Call GPT-5 chat completions via Azure OpenAI deployment endpoint."""
-    openai_base = AZURE_OPENAI_ENDPOINT if AZURE_OPENAI_ENDPOINT else FOUNDRY_PROJECT_ENDPOINT
+    openai_base = (AZURE_OPENAI_ENDPOINT or FOUNDRY_PROJECT_ENDPOINT).rstrip("/")
     url = f"{openai_base}/openai/deployments/{MODEL_DEPLOYMENT}/chat/completions?api-version=2024-12-01-preview"
     payload = {
         "messages": [{"role": "user", "content": prompt}],
@@ -166,13 +166,18 @@ def generate_cases_for_doc(doc_path: Path) -> list[dict]:
             text = re.sub(r"\s*```$", "", text)
             # The response_format json_object wraps in an object — extract the array
             parsed = json.loads(text)
-            if isinstance(parsed, dict):
-                # Model returned {"cases": [...]} or similar wrapper
-                cases = next(v for v in parsed.values() if isinstance(v, list))
-            else:
-                cases = parsed
-            for c in cases:
-                assert "id" in c and "question" in c and "expected_keywords" in c
+            cases = parsed.get("cases") if isinstance(parsed, dict) else None
+            if not isinstance(cases, list) or len(cases) != 2 or not all(
+                isinstance(c, dict)
+                and all(isinstance(c.get(key), str) and c[key].strip() for key in ("id", "question"))
+                and isinstance(c.get("expected_keywords"), list)
+                and 4 <= len(c["expected_keywords"]) <= 6
+                and len({k.strip().lower() for k in c["expected_keywords"] if isinstance(k, str)}) == len(c["expected_keywords"])
+                and all(isinstance(k, str) and k.strip() for k in c["expected_keywords"])
+                and c.get("expected_sources") == [filename]
+                for c in cases
+            ):
+                raise ValueError(f"Expected two cases citing {filename}, each with four to six distinct keywords")
             return cases
         except urllib.error.HTTPError as exc:
             if exc.code == 429:
@@ -182,7 +187,7 @@ def generate_cases_for_doc(doc_path: Path) -> list[dict]:
             else:
                 print(f"    HTTP {exc.code}: {exc.read().decode()[:200]}", file=sys.stderr)
                 return []
-        except Exception as exc:
+        except (ValueError, KeyError, TypeError, IndexError, RuntimeError, OSError) as exc:
             print(f"    ERROR for {filename}: {exc}", file=sys.stderr)
             return []
 
@@ -210,6 +215,7 @@ def deduplicate_ids(cases: list[dict]) -> list[dict]:
 def main():
     parser = argparse.ArgumentParser(description="Generate eval cases from docs/")
     parser.add_argument("--dry-run", action="store_true", help="Print cases, don't write")
+    parser.add_argument("--output", type=Path, default=OUTPUT_PATH, help="Path to write the generated suite")
     args = parser.parse_args()
 
     if not FOUNDRY_PROJECT_ENDPOINT:
@@ -235,6 +241,8 @@ def main():
         rel = doc_path.relative_to(DOCS_DIR.parent)
         print(f"  {rel} ...", end=" ", flush=True)
         cases = generate_cases_for_doc(doc_path)
+        if not cases:
+            sys.exit(f"Generation failed for {rel}; refusing to evaluate an incomplete suite.")
         print(f"{len(cases)} cases generated")
         all_cases.extend(cases)
         time.sleep(1)
@@ -247,9 +255,9 @@ def main():
         print(json.dumps(all_cases, indent=2))
         return
 
-    OUTPUT_PATH.parent.mkdir(exist_ok=True)
-    OUTPUT_PATH.write_text(json.dumps(all_cases, indent=2))
-    print(f"Written → {OUTPUT_PATH}")
+    args.output.parent.mkdir(exist_ok=True)
+    args.output.write_text(json.dumps(all_cases, indent=2))
+    print(f"Written → {args.output}")
     print("\nRun evals with:\n  bash scripts/eval.sh")
 
 

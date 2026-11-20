@@ -33,6 +33,11 @@ FULL_FEATURE_NAMES = RETRIEVAL_FEATURE_NAMES + [
 ]
 
 
+def retrieval_from_row(row: dict) -> np.ndarray:
+    """Reconstruct the exact six features the hosted scorer uses."""
+    return np.array([float(row[name]) for name in RETRIEVAL_FEATURE_NAMES], dtype=np.float64)
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _entropy(scores: list[float]) -> float:

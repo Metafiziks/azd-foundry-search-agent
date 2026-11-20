@@ -32,12 +32,20 @@ services:
               value: ${AZURE_SEARCH_ENDPOINT}
             - name: AZURE_SEARCH_INDEX
               value: ${AZURE_SEARCH_INDEX}
+            - name: KB_ACCESS_MODE
+              value: ${KB_ACCESS_MODE}
+            - name: PURVIEW_SEARCH_ENDPOINT
+              value: ${PURVIEW_SEARCH_ENDPOINT}
+            - name: PURVIEW_SEARCH_INDEX
+              value: ${PURVIEW_SEARCH_INDEX}
             - name: LOG_ANALYTICS_DCE
               value: ${LOG_ANALYTICS_DCE}
             - name: LOG_ANALYTICS_DCR_IMMUTABLE_ID
               value: ${LOG_ANALYTICS_DCR_IMMUTABLE_ID}
             - name: LOG_ANALYTICS_STREAM_NAME
               value: ${LOG_ANALYTICS_STREAM_NAME}
+            - name: BLOB_ACCOUNT_URL
+              value: ${BLOB_ACCOUNT_URL}
             - name: MEMORY_ENABLED
               value: ${MEMORY_ENABLED}
             - name: MEMORY_OPTIONAL

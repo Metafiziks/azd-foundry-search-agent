@@ -15,33 +15,66 @@ SAFE="${SAFE%-}"
 SEARCH_NAME="${SAFE}-search"
 STORAGE_NAME=$(echo "$AZURE_ENV_NAME" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]' | cut -c1-20)docs
 INDEX_NAME="${SAFE}-index"
+KB_ACCESS_MODE="${KB_ACCESS_MODE:-sample}"
+if [ -n "${AZURE_SUBSCRIPTION_ID:-}" ]; then
+  az() { command az "$@" --subscription "$AZURE_SUBSCRIPTION_ID"; }
+fi
+case "$KB_ACCESS_MODE" in
+  purview)
+    SEARCH_NAME="${SAFE}-purview-search"
+    STORAGE_NAME="${STORAGE_NAME%docs}pdoc"
+    INDEX_NAME="${SAFE}-purview"
+    ;;
+  sample)
+    if [ -n "${PURVIEW_SEARCH_ENDPOINT:-}${PURVIEW_SEARCH_INDEX:-}" ]; then
+      echo "Protected Search settings require KB_ACCESS_MODE=purview." >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "KB_ACCESS_MODE must be 'sample' or 'purview'." >&2
+    exit 1
+    ;;
+esac
 
 # --- Model deployment ---
 echo "► Checking model deployment..."
-MODEL_COUNT=$(az cognitiveservices account deployment list \
-  --name "$ACCOUNT" --resource-group "$RG" \
-  --query "length(@)" -o tsv 2>/dev/null || echo "0")
+MODEL_NAME="${AZURE_AI_MODEL_NAME:-gpt-5}"
+MODEL_VERSION="${AZURE_AI_MODEL_VERSION:-2025-08-07}"
+MODEL_CAPACITY="${AZURE_AI_MODEL_CAPACITY:-10}"
+AZURE_AI_MODEL_DEPLOYMENT_NAME="${AZURE_AI_MODEL_DEPLOYMENT_NAME:-$MODEL_NAME}"
+DEPLOYMENTS=$(az cognitiveservices account deployment list \
+  --name "$ACCOUNT" --resource-group "$RG" --output json)
+EXISTING_MODEL=$(python3 -c 'import json, sys
+for deployment in json.load(sys.stdin):
+    if deployment["name"] == sys.argv[1]:
+        print(deployment["properties"]["model"]["name"])
+        break
+' "$AZURE_AI_MODEL_DEPLOYMENT_NAME" <<< "$DEPLOYMENTS")
 
-if [ "$MODEL_COUNT" = "0" ]; then
-  echo "  Deploying gpt-5 model (this takes 2-3 minutes)..."
+if [ -z "$EXISTING_MODEL" ]; then
+  echo "  Deploying $MODEL_NAME model (this takes 2-3 minutes)..."
   az cognitiveservices account deployment create \
     --name "$ACCOUNT" \
     --resource-group "$RG" \
-    --deployment-name "gpt-5" \
-    --model-name "gpt-5" \
-    --model-version "2025-08-07" \
+    --deployment-name "$AZURE_AI_MODEL_DEPLOYMENT_NAME" \
+    --model-name "$MODEL_NAME" \
+    --model-version "$MODEL_VERSION" \
     --model-format "OpenAI" \
     --sku-name "GlobalStandard" \
-    --sku-capacity 10 \
+    --sku-capacity "$MODEL_CAPACITY" \
     --output none
-  echo "  ✓ Model deployed: gpt-5"
+  echo "  ✓ Model deployed: $AZURE_AI_MODEL_DEPLOYMENT_NAME"
+elif [ "$EXISTING_MODEL" != "$MODEL_NAME" ]; then
+  echo "Deployment $AZURE_AI_MODEL_DEPLOYMENT_NAME already uses $EXISTING_MODEL, not $MODEL_NAME." >&2
+  exit 1
 else
-  echo "  ✓ Model already deployed"
+  echo "  ✓ Model already deployed: $AZURE_AI_MODEL_DEPLOYMENT_NAME"
 fi
 
-azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "gpt-5"
-AZURE_AI_MODEL_DEPLOYMENT_NAME="gpt-5"
+azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "$AZURE_AI_MODEL_DEPLOYMENT_NAME"
 
+if [ "$KB_ACCESS_MODE" = "sample" ]; then
 echo "► Checking embedding deployment for Foundry Memory..."
 EMBEDDING_DEPLOYMENT="${AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME:-text-embedding-3-small}"
 if az cognitiveservices account deployment show \
@@ -72,12 +105,18 @@ else
   fi
 fi
 azd env set AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME "$EMBEDDING_DEPLOYMENT"
+fi
 
 # --- AI Search service ---
 echo ""
 echo "► Creating AI Search service: ${SEARCH_NAME}..."
 EXISTING_SEARCH=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" --query name -o tsv 2>/dev/null || true)
 SEARCH_ENDPOINT="https://${SEARCH_NAME}.search.windows.net"
+if [ "$KB_ACCESS_MODE" = "purview" ]; then
+  SEARCH_AUTH=(--disable-local-auth true --identity-type SystemAssigned)
+else
+  SEARCH_AUTH=(--auth-options aadOrApiKey --aad-auth-failure-mode http401WithBearerChallenge)
+fi
 
 if [ "$EXISTING_SEARCH" = "$SEARCH_NAME" ]; then
   echo "  (already exists)"
@@ -92,8 +131,7 @@ else
         --resource-group "$RG" \
         --location "$REGION" \
         --sku Standard \
-        --auth-options aadOrApiKey \
-        --aad-auth-failure-mode http401WithBearerChallenge \
+        "${SEARCH_AUTH[@]}" \
         --output none 2>/tmp/search_create_err; then
         SEARCH_CREATED=true
         echo "  ✓ Search service created in ${REGION}"
@@ -143,6 +181,74 @@ fi
 echo "  ✓ Search service ready"
 
 SEARCH_RESOURCE_ID=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" --query id -o tsv)
+
+if [ "$KB_ACCESS_MODE" = "purview" ]; then
+  SEARCH_PRINCIPAL=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" \
+    --query "identity.principalId" -o tsv)
+  SEARCH_KEYS_DISABLED=$(az search service show --name "$SEARCH_NAME" --resource-group "$RG" \
+    --query disableLocalAuth -o tsv)
+  if [ -z "$SEARCH_PRINCIPAL" ] || [ "$SEARCH_KEYS_DISABLED" != "true" ]; then
+    echo "Purview Search requires a system-assigned identity and disabled API keys." >&2
+    exit 1
+  fi
+
+  if ! az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --output none 2>/dev/null; then
+    az storage account create --name "$STORAGE_NAME" --resource-group "$RG" --location "$LOCATION" \
+      --sku Standard_LRS --kind StorageV2 --allow-blob-public-access false --allow-shared-key-access false \
+      --output none
+  fi
+  STORAGE_RESOURCE_ID=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" --query id -o tsv)
+  STORAGE_PRIVATE=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RG" \
+    --query 'allowBlobPublicAccess == `false` && allowSharedKeyAccess == `false`' -o tsv)
+  if [ "$STORAGE_PRIVATE" != "true" ]; then
+    echo "Purview Storage requires both anonymous access and shared keys to be disabled." >&2
+    exit 1
+  fi
+  az storage account blob-service-properties update --account-name "$STORAGE_NAME" --resource-group "$RG" \
+    --enable-delete-retention true --delete-retention-days 7 --enable-versioning false --output none
+  az storage container-rm create --name docs --storage-account "$STORAGE_NAME" --resource-group "$RG" \
+    --public-access off --output none
+  az role assignment create --assignee-object-id "$SEARCH_PRINCIPAL" --assignee-principal-type ServicePrincipal \
+    --role "Storage Blob Data Reader" --scope "${STORAGE_RESOURCE_ID}/blobServices/default/containers/docs" --output none
+
+  azd env set PURVIEW_SEARCH_ENDPOINT "$SEARCH_ENDPOINT"
+  azd env set PURVIEW_SEARCH_INDEX "$INDEX_NAME"
+  azd env set AZURE_SEARCH_RESOURCE_ID "$SEARCH_RESOURCE_ID"
+  azd env set PURVIEW_STORAGE_ACCOUNT "$STORAGE_NAME"
+  azd env set PURVIEW_SEARCH_IDENTITY "$SEARCH_PRINCIPAL"
+  echo "Purview Search identity for tenant admin approval: $SEARCH_PRINCIPAL"
+
+  PRINCIPAL_TYPE=$(az account show --query user.type -o tsv)
+  DEPLOYMENT_TENANT=$(az account show --query tenantId -o tsv)
+  : "${DEPLOYMENT_TENANT:?Expected Azure CLI tenant ID for the protected subscription}"
+  GRAPH=(python3 "$(dirname "$0")/purview_graph.py" --subscription "$AZURE_SUBSCRIPTION_ID" --tenant "$DEPLOYMENT_TENANT")
+  case "$PRINCIPAL_TYPE" in
+    user)
+      PROVISIONER_OID=$("${GRAPH[@]}")
+      PROVISIONER_TYPE=User
+      ;;
+    servicePrincipal)
+      PROVISIONER_APP=$(az account show --query user.name -o tsv)
+      if ! [[ "$PROVISIONER_APP" =~ ^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$ ]]; then
+        echo "Expected an application ID for the Purview provisioner." >&2
+        exit 1
+      fi
+      PROVISIONER_OID=$("${GRAPH[@]}" --app-id "$PROVISIONER_APP")
+      PROVISIONER_TYPE=ServicePrincipal
+      ;;
+    *) echo "Unsupported Purview provisioner identity type: $PRINCIPAL_TYPE" >&2; exit 1 ;;
+  esac
+  if ! [[ "$PROVISIONER_OID" =~ ^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$ ]]; then
+    echo "Expected exactly one Purview provisioner identity in the deployment tenant." >&2
+    exit 1
+  fi
+  az role assignment create --assignee-object-id "$PROVISIONER_OID" \
+    --assignee-principal-type "$PROVISIONER_TYPE" --role "Search Service Contributor" \
+    --scope "$SEARCH_RESOURCE_ID" --output none
+  python3 "$(dirname "$0")/setup_purview_index.py" \
+    --search-service "$SEARCH_NAME" --index "$INDEX_NAME" --storage-resource-id "$STORAGE_RESOURCE_ID" \
+    --container docs --resume
+else
 SEARCH_KEY=$(az search admin-key show --service-name "$SEARCH_NAME" --resource-group "$RG" --query primaryKey -o tsv)
 
 # --- Storage account ---
@@ -262,6 +368,7 @@ python3 "$(dirname "$0")/search_setup.py" \
 azd env set AZURE_SEARCH_ENDPOINT "$SEARCH_ENDPOINT"
 azd env set AZURE_SEARCH_INDEX "$INDEX_NAME"
 azd env set AZURE_SEARCH_RESOURCE_ID "$SEARCH_RESOURCE_ID"
+fi
 
 echo ""
 # --- Register Foundry project with data plane and wait for readiness ---
@@ -274,7 +381,7 @@ import subprocess, sys, time, urllib.request, urllib.error, json as _json
 
 def get_token():
     r = subprocess.run(
-        ["az", "account", "get-access-token",
+        ["az", "account", "get-access-token", "--subscription", sub_id,
          "--resource", "https://ai.azure.com",
          "--query", "accessToken", "-o", "tsv"],
         capture_output=True, text=True
@@ -364,6 +471,11 @@ print("     Run 'azd deploy' again in 30-60 min. This is an Azure platform delay
 print("     Tip: visiting ai.azure.com and clicking your project may accelerate initialization.")
 WAIT_EOF
 echo ""
+
+if [ "$KB_ACCESS_MODE" = "purview" ]; then
+  echo "Purview mode: infrastructure only. Use scripts/ingest_purview.py to upload labeled documents after tenant approval."
+  exit 0
+fi
 
 # --- Azure AI Foundry Memory Store (preview) ---
 echo "► Setting up Azure AI Foundry Memory Store..."
@@ -561,6 +673,7 @@ azd env set LOG_ANALYTICS_WORKSPACE_ID    "$WORKSPACE_ID"
 azd env set LOG_ANALYTICS_DCE             "$DCE_ENDPOINT"
 azd env set LOG_ANALYTICS_DCR_IMMUTABLE_ID "$DCR_IMMUTABLE_ID"
 azd env set LOG_ANALYTICS_STREAM_NAME    "Custom-AgentTelemetry_CL"
+azd env set BLOB_ACCOUNT_URL "https://${STORAGE_NAME}.blob.core.windows.net"
 echo "  ✓ Log Analytics env vars saved"
 
 # Create models container in blob for IsolationForest

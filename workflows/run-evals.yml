@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   evals:
+    if: vars.KB_ACCESS_MODE != 'purview'
     runs-on: ubuntu-latest
 
     env:
@@ -40,7 +41,7 @@ jobs:
         run: azd auth login --client-id "$AZURE_CLIENT_ID" --federated-credential-provider github --tenant-id "$AZURE_TENANT_ID"
 
       - name: Install dependencies
-        run: pip install azure-identity -q
+        run: pip install -q azure-identity azure-monitor-ingestion 'transformers>=4.51,<5' 'torch>=2.6'
 
       - name: Run evaluations
         run: |
@@ -48,6 +49,7 @@ jobs:
           python3 scripts/run_evals.py --output eval_results.json
 
       - name: Upload eval results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: eval-results-${{ github.run_id }}
