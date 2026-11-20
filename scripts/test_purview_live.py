@@ -40,6 +40,27 @@ def acceptance_files(args):
     return root, files
 
 
+def read_token(label):
+    prompt = f"{label}: "
+    try:
+        import termios
+    except ImportError:
+        return getpass(prompt).strip()
+
+    fd = sys.stdin.fileno()
+    original = termios.tcgetattr(fd)
+    mode = termios.tcgetattr(fd)
+    # macOS canonical input cannot hold a full Entra access token.
+    mode[3] &= ~(termios.ICANON | termios.ECHO | termios.ECHONL)
+    mode[6][termios.VMIN] = 1
+    mode[6][termios.VTIME] = 0
+    termios.tcsetattr(fd, termios.TCSAFLUSH, mode)
+    try:
+        return getpass(prompt).strip()
+    finally:
+        termios.tcsetattr(fd, termios.TCSAFLUSH, original)
+
+
 def response_text(body):
     return "\n".join(
         part["text"]
@@ -174,7 +195,7 @@ def main():
             raise SystemExit("Azure CLI failed during live Purview ingestion") from None
         except (OSError, ValueError, RuntimeError) as exc:
             raise SystemExit(f"Live Purview ingestion failed: {exc}") from None
-    tokens = [getpass(f"{label}: ").strip() for label in labels]
+    tokens = [read_token(label) for label in labels]
     if any(not token or any(char.isspace() for char in token) for token in tokens) or len(set(tokens)) != len(tokens):
         parser.error("Supply distinct access tokens without a Bearer prefix")
     try:
