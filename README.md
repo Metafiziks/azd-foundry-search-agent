@@ -184,11 +184,17 @@ Run 1 used `MEMORY_OPTIONAL=false`; run 2 used the defaults.
 
 ## Comparison across clouds
 
-| | Azure (this repo) | [AWS](https://github.com/Metafiziks/aws-bedrock-agent) | [GCP](https://github.com/Metafiziks/gcp-search-agent) |
+|  | Azure (this repo) | [AWS](https://github.com/Metafiziks/aws-bedrock-agent) | [GCP](https://github.com/Metafiziks/gcp-search-agent) |
 |---|---|---|---|
 | Provision | `azd up` | `bash scripts/provision.sh` | `bash scripts/provision.sh` |
-| LLM | GPT-5 (Foundry) | Amazon Nova Lite | Gemini 2.5 Flash |
-| Agent runtime | Foundry hosted agent | Bedrock Agents | Google ADK + Cloud Run |
-| RAG | Azure AI Search | Bedrock Knowledge Bases | Vertex AI Search |
-| Eval judge | GPT-5 | Nova Pro | Gemini 2.5 Flash |
+| LLM | GPT-5 (Azure AI Foundry) | Amazon Nova Lite (Bedrock) | Gemini 3.5 Flash (Vertex AI) |
+| Agent runtime | Foundry hosted agent | Bedrock Agents (managed) | Google ADK + Cloud Run |
+| RAG | Azure AI Search | Bedrock Knowledge Bases | Vertex AI Search Enterprise |
+| Vector store | Azure AI Search (built-in) | OpenSearch Serverless | Vertex AI Search (built-in) |
+| CI auth | Azure OIDC (federated credentials) | GitHub OIDC | Workload Identity Federation |
+| Eval judge | GPT-5 | Amazon Nova Pro | Gemini 3.5 Flash |
+| Memory | Foundry Memory Store (preview) | Bedrock Agents Classic session-summary memory (optional) | ADK session/user state; optional Agent Engine Memory Bank path |
+| Protected mode | `KB_ACCESS_MODE=purview` (preview) | `KB_ACCESS_MODE=protected` | `KB_ACCESS_MODE=protected` (Preview) |
+| Protection mechanism | Purview sensitivity labels via Foundry IQ | Managed Knowledge Base document ACLs (user emails) | Agent Search document ACLs |
+| Who proves the user | The user's delegated token, checked by Azure AI Search | Your backend: API Gateway JWT authorizer (Cognito). Bedrock trusts the email it is given | The user's own Google token, checked by Agent Search |
 | Teardown | `azd down` | `bash scripts/teardown.sh` | `bash scripts/teardown.sh` |
