@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Who is actually calling the Foundry Memory Store</title>
+  <desc id="desc">Two lanes. With Foundry User granted, the hosted agent reads memory in under a second and writes in about a minute. Without it, every read fails in milliseconds with a permissions error. A new grant took about four minutes to take effect.</desc>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#abd3ce" stroke-opacity=".10" stroke-width="1"/>
+    </pattern>
+    <marker id="ok" markerUnits="userSpaceOnUse" markerWidth="16" markerHeight="16" refX="14" refY="8" orient="auto"><path d="M0 0L16 8L0 16z" fill="#9ce3ce"/></marker>
+    <marker id="no" markerUnits="userSpaceOnUse" markerWidth="16" markerHeight="16" refX="14" refY="8" orient="auto"><path d="M0 0L16 8L0 16z" fill="#ff9d79"/></marker>
+    <style>
+      .mono{font-family:Menlo,'Courier New',monospace;font-weight:700}
+      .display{font-family:Baskerville,Georgia,serif;font-weight:700}
+      .sans{font-family:'Avenir Next','Helvetica Neue',sans-serif;font-weight:500}
+    </style>
+  </defs>
+  <rect width="1600" height="900" fill="#101c1f"/>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+
+  <text class="display" x="70" y="96" font-size="54" fill="#faf2dc" letter-spacing="-1">Who is actually calling the Memory Store?</text>
+  <text class="sans" x="70" y="140" font-size="26" fill="#add2c6">Memory calls run as the caller. At runtime, the caller is the agent's own hosting identity.</text>
+
+  <!-- shared boxes -->
+  <g>
+    <rect x="70" y="200" width="330" height="520" rx="12" fill="#152728" stroke="#709a91" stroke-width="2"/>
+    <text class="mono" x="235" y="246" font-size="21" fill="#e8c86f" text-anchor="middle" style="letter-spacing:3px">HOSTED AGENT</text>
+    <text class="mono" x="235" y="278" font-size="16" fill="#b9d1c5" text-anchor="middle">OID 834f2e30-46bd…</text>
+
+    <rect x="620" y="200" width="360" height="520" rx="12" fill="#152728" stroke="#709a91" stroke-width="2"/>
+    <text class="mono" x="800" y="246" font-size="21" fill="#e8c86f" text-anchor="middle" style="letter-spacing:3px">MEMORY STORE</text>
+    <text class="mono" x="800" y="278" font-size="16" fill="#b9d1c5" text-anchor="middle">fsae2e1-memory (preview)</text>
+
+    <rect x="1200" y="200" width="330" height="520" rx="12" fill="#152728" stroke="#709a91" stroke-width="2"/>
+    <text class="mono" x="1365" y="246" font-size="21" fill="#e8c86f" text-anchor="middle" style="letter-spacing:3px">MODELS</text>
+    <text class="mono" x="1365" y="278" font-size="16" fill="#b9d1c5" text-anchor="middle">gpt-5 + embeddings</text>
+  </g>
+
+  <!-- Lane 1: granted -->
+  <g>
+    <rect x="96" y="318" width="278" height="150" rx="8" fill="#0f1c1e" stroke="#9ce3ce" stroke-width="2"/>
+    <text class="mono" x="235" y="358" font-size="19" fill="#9ce3ce" text-anchor="middle">FOUNDRY USER</text>
+    <text class="mono" x="235" y="392" font-size="30" fill="#9ce3ce" text-anchor="middle">GRANTED</text>
+    <text class="sans" x="235" y="432" font-size="19" fill="#e1ebe0" text-anchor="middle">data actions allowed</text>
+    <path d="M400 392H618" stroke="#9ce3ce" stroke-width="4" marker-end="url(#ok)"/>
+    <path d="M980 392H1196" stroke="#9ce3ce" stroke-width="4" marker-end="url(#ok)"/>
+    <g class="mono" font-size="20" fill="#9ce3ce">
+      <text x="640" y="336">read_ok</text>
+      <text x="640" y="366" fill="#e1ebe0">0.4 - 1.0 s</text>
+      <text x="640" y="430">write_completed</text>
+      <text x="640" y="460" fill="#e1ebe0">~60 s. Slow. Not broken.</text>
+    </g>
+  </g>
+
+  <!-- Lane 2: missing -->
+  <g>
+    <rect x="96" y="536" width="278" height="150" rx="8" fill="#0f1c1e" stroke="#ff9d79" stroke-width="2"/>
+    <text class="mono" x="235" y="576" font-size="19" fill="#ff9d79" text-anchor="middle">FOUNDRY USER</text>
+    <text class="mono" x="235" y="610" font-size="30" fill="#ff9d79" text-anchor="middle">MISSING</text>
+    <text class="sans" x="235" y="650" font-size="19" fill="#e1ebe0" text-anchor="middle">Search reader. Not enough.</text>
+    <path d="M400 610H560" stroke="#ff9d79" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#no)"/>
+    <text class="mono" x="800" y="560" font-size="20" fill="#ff9d79" text-anchor="middle">read_failed in 35 - 220 ms</text>
+    <rect x="640" y="580" width="320" height="108" fill="#2a1713" stroke="#ff9d79" stroke-width="1.5"/>
+    <g class="mono" font-size="13" fill="#ffb69b">
+      <text x="652" y="602">Identity(object id: 834f2e30…)</text>
+      <text x="652" y="622">does not have permissions for</text>
+      <text x="652" y="642">Microsoft.CognitiveServices/</text>
+      <text x="652" y="662">accounts/AIServices/agents/read</text>
+      <text x="652" y="682">actions.</text>
+    </g>
+    <path d="M1010 610H1160" stroke="#ff9d79" stroke-opacity=".5" stroke-width="3" stroke-dasharray="3 9"/>
+    <text class="mono" x="1365" y="610" font-size="18" fill="#ff9d79" fill-opacity=".7" text-anchor="middle">never reached</text>
+  </g>
+
+  <!-- timeline -->
+  <g>
+    <path d="M70 790H1530" stroke="#74958e" stroke-width="2"/>
+    <circle cx="300" cy="790" r="9" fill="#e8c86f"/>
+    <circle cx="1060" cy="790" r="9" fill="#9ce3ce"/>
+    <path d="M309 790H1051" stroke="#e8c86f" stroke-width="6"/>
+    <g class="mono" font-size="17">
+      <text x="300" y="764" fill="#e8c86f" text-anchor="middle">role granted 16:24:26</text>
+      <text x="1060" y="764" fill="#9ce3ce" text-anchor="middle">first successful read 16:28:14</text>
+      <text x="680" y="828" fill="#faf2dc" text-anchor="middle" font-size="22">3 min 48 s of "it's fine, probably"</text>
+    </g>
+  </g>
+  <text class="sans" x="70" y="878" font-size="18" fill="#74958e">Live test, disposable Azure environment, Nov 2026. Role removed, memory reads failed; Foundry User re-added alone, reads and writes succeeded.</text>
+</svg>
