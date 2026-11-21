@@ -72,6 +72,8 @@ class TelemetryFoundryMemoryProvider(ContextProvider):
         self.scope_template = scope_template
         self.update_delay = update_delay
         self.optional = optional
+        self._background_writes: set[asyncio.Task[None]] = set()
+        self._write_error: Exception | None = None
 
     def _scope_for_context(self, context: SessionContext) -> str:
         session_id = context.session_id or str(context.service_session_id or "default-session")
@@ -145,6 +147,10 @@ class TelemetryFoundryMemoryProvider(ContextProvider):
         context: SessionContext,
         state: dict[str, Any],
     ) -> None:
+        if self._write_error is not None and not self.optional:
+            error, self._write_error = self._write_error, None
+            raise MemoryUnavailableError(f"Foundry memory write failed: {error}") from error
+
         query = self._query_from_context(context)
         if not query.strip():
             return
@@ -239,22 +245,17 @@ class TelemetryFoundryMemoryProvider(ContextProvider):
                 update_delay=self.update_delay,
             )
             state["previous_memory_update_id"] = getattr(update_poller, "update_id", None)
-            if self.optional:
-                asyncio.create_task(self._complete_update(update_poller, context, len(items), start))
-                self._log(
-                    context=context,
-                    write_count=len(items),
-                    latency_ms=(time.monotonic() - start) * 1000,
-                    status="write_queued",
-                )
-                return
-
-            await update_poller.result()
+            # Memory extraction takes tens of seconds (observed avg 40s, max 63s), so it must
+            # never sit on the response path, even in strict mode. Strict mode instead fails
+            # the *next* request if a background write failed.
+            task = asyncio.create_task(self._complete_update(update_poller, context, len(items), start))
+            self._background_writes.add(task)
+            task.add_done_callback(self._background_writes.discard)
             self._log(
                 context=context,
                 write_count=len(items),
                 latency_ms=(time.monotonic() - start) * 1000,
-                status="write_completed",
+                status="write_queued",
             )
         except (AzureError, AttributeError, TypeError, ValueError) as exc:
             self._log(
@@ -287,7 +288,10 @@ class TelemetryFoundryMemoryProvider(ContextProvider):
                 latency_ms=(time.monotonic() - start) * 1000,
                 status="write_failed",
             )
-            self._handle_expected_error("write", exc)
+            # Runs in a background task: raising here would be an unretrieved task exception.
+            # Record it so strict mode can fail the next request instead.
+            logger.warning("Foundry memory background write failed: %s", exc)
+            self._write_error = exc
 
 
 def build_memory_provider(project_client: Any) -> TelemetryFoundryMemoryProvider | None:
