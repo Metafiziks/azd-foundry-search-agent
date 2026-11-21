@@ -67,7 +67,7 @@ MEMORY_EVAL_ENABLED = (
 )
 EVAL_MEMORY_USER_ID = os.environ.get("EVAL_MEMORY_USER_ID", f"eval-user-{os.environ.get('AZURE_ENV_NAME', 'local')}")
 EVAL_MEMORY_SESSION_ID = os.environ.get("EVAL_MEMORY_SESSION_ID", f"eval-session-{uuid.uuid4()}")
-EVAL_MEMORY_SETTLE_SECONDS = int(os.environ.get("EVAL_MEMORY_SETTLE_SECONDS", "20"))
+EVAL_MEMORY_SETTLE_SECONDS = int(os.environ.get("EVAL_MEMORY_SETTLE_SECONDS", "90"))
 EVAL_AGENT_TIMEOUT_SECONDS = int(os.environ.get("EVAL_AGENT_TIMEOUT_SECONDS", "420"))
 EVAL_AGENT_ATTEMPTS = int(os.environ.get("EVAL_AGENT_ATTEMPTS", "5"))
 EVAL_INTER_CASE_WAIT_SECONDS = int(os.environ.get("EVAL_INTER_CASE_WAIT_SECONDS", "60"))

@@ -102,32 +102,28 @@ if [[ "$HOSTING_OID" =~ ^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$ 
     --query id -o tsv 2>/dev/null || true)
   PROJECT_RESOURCE_ID="${COG_RESOURCE_ID}/projects/${AZURE_ENV_NAME}"
   if [ -n "$COG_RESOURCE_ID" ]; then
+    # Memory Store runs as the caller, which at runtime is this hosting identity. Foundry User
+    # (data actions such as accounts/AIServices/agents/read) is mandatory: without it every
+    # memory read fails with "Identity ... does not have permissions". Cognitive Services OpenAI
+    # User is what Microsoft's quickstart lists for embeddings; it was not required in testing
+    # but is kept for parity with the documented prerequisites.
     for ROLE_SCOPE in "$COG_RESOURCE_ID" "$PROJECT_RESOURCE_ID"; do
-      echo "► Granting Foundry User for memory store read/write access on ${ROLE_SCOPE##*/}..."
-      if az role assignment create \
-        --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
-        --role "Foundry User" \
-        --scope "$ROLE_SCOPE" \
-        --output none 2>/dev/null; then
-        echo "  ✓ Foundry User role granted"
-      elif az role assignment create \
-          --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
-          --role "Azure AI User" \
-          --scope "$ROLE_SCOPE" \
-          --output none 2>/dev/null; then
-        echo "  ✓ Azure AI User role granted"
-      else
-        echo "  (Foundry/Azure AI User role already assigned or unavailable)"
-      fi
-
-      echo "► Granting Cognitive Services OpenAI User for memory store access on ${ROLE_SCOPE##*/}..."
-      az role assignment create \
-        --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
-        --role "Cognitive Services OpenAI User" \
-        --scope "$ROLE_SCOPE" \
-        --output none 2>/dev/null \
-        && echo "  ✓ OpenAI role granted" \
-        || echo "  (OpenAI role already assigned)"
+      for ROLE in "Foundry User" "Cognitive Services OpenAI User"; do
+        echo "► Granting ${ROLE} on ${ROLE_SCOPE##*/}..."
+        if ROLE_OUT=$(az role assignment create \
+            --assignee-object-id "$HOSTING_OID" --assignee-principal-type ServicePrincipal \
+            --role "$ROLE" --scope "$ROLE_SCOPE" --output none 2>&1); then
+          echo "  ✓ ${ROLE} granted"
+        else
+          case "$ROLE_OUT" in
+            *RoleAssignmentExists*|*"already exists"*) echo "  ✓ ${ROLE} already assigned" ;;
+            *)
+              echo "  ERROR: could not grant ${ROLE} on ${ROLE_SCOPE##*/}: ${ROLE_OUT##*ERROR: }" >&2
+              if [ "$ROLE" = "Foundry User" ] && [ "${MEMORY_OPTIONAL:-true}" = "false" ]; then exit 1; fi
+              ;;
+          esac
+        fi
+      done
     done
   fi
   DCR_RESOURCE_ID=$(az resource show --resource-type Microsoft.Insights/dataCollectionRules \
@@ -166,12 +162,14 @@ else
   exit 1
 fi
 
-# RBAC assignments propagate globally over 2–10 minutes.
-# The hub and project identities were already granted in postprovision (earlier in the pipeline),
-# so this wait covers the agent identity grant above.
+# RBAC assignments propagate over several minutes. Measured on a live deployment: a new
+# Foundry User grant took ~4 minutes before Memory Store calls from the hosting identity
+# stopped failing. The hub and project identities were granted in postprovision, so this
+# wait covers the hosting identity grant above.
+RBAC_WAIT="${RBAC_PROPAGATION_WAIT_SECONDS:-300}"
 echo ""
-echo "  Waiting 5 minutes for RBAC propagation..."
-sleep 300
+echo "  Waiting $((RBAC_WAIT / 60)) minutes for RBAC propagation (override with RBAC_PROPAGATION_WAIT_SECONDS)..."
+sleep "$RBAC_WAIT"
 
 # --- Generate eval cases from docs + run evaluations ---
 echo ""

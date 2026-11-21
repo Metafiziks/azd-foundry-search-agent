@@ -1,63 +1,94 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
-  <title id="title">Purview field test: one question, two identities</title>
-  <desc id="desc">In the protected deployment, Foundry IQ and Azure AI Search returned a cited source for the allowed identity and no documents for the denied identity. An unlabeled control did not appear in the answer.</desc>
+  <title id="title">Same question, two identities, one label</title>
+  <desc id="desc">The same question goes through the hosted agent and Foundry IQ to a Purview-labeled index. The allowed user gets the fact and a citation. The denied user gets a completed response with no documents. An unlabeled control document is never disclosed. Missing delegation, stateful requests and anonymous Blob reads were all rejected.</desc>
   <defs>
-    <pattern id="paper" width="36" height="36" patternUnits="userSpaceOnUse">
-      <circle cx="1" cy="1" r="1" fill="#45645c" opacity=".2"/>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#abd3ce" stroke-opacity=".10" stroke-width="1"/>
     </pattern>
+    <pattern id="hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <path d="M0 0V12" stroke="#ff9d79" stroke-width="3" stroke-opacity=".30"/>
+    </pattern>
+    <marker id="ok" markerUnits="userSpaceOnUse" markerWidth="16" markerHeight="16" refX="14" refY="8" orient="auto"><path d="M0 0L16 8L0 16z" fill="#9ce3ce"/></marker>
+    <marker id="no" markerUnits="userSpaceOnUse" markerWidth="16" markerHeight="16" refX="14" refY="8" orient="auto"><path d="M0 0L16 8L0 16z" fill="#ff9d79"/></marker>
+    <marker id="nb" markerUnits="userSpaceOnUse" markerWidth="16" markerHeight="16" refX="14" refY="8" orient="auto"><path d="M0 0L16 8L0 16z" fill="#74958e"/></marker>
     <style>
-      .mono{font-family:Menlo,'Courier New',monospace;font-weight:700;letter-spacing:2px}
+      .mono{font-family:Menlo,'Courier New',monospace;font-weight:700}
       .display{font-family:Baskerville,Georgia,serif;font-weight:700}
       .sans{font-family:'Avenir Next','Helvetica Neue',sans-serif;font-weight:500}
     </style>
   </defs>
-  <path d="M0 0h1600v900H0z" fill="#f7eed9"/>
-  <path d="M0 0h1600v900H0z" fill="url(#paper)"/>
-  <path d="M76 78h1448M76 820h1448" stroke="#496961" stroke-width="2"/>
-  <path d="M76 78h98" stroke="#925236" stroke-width="5"/>
-  <text class="mono" x="76" y="126" font-size="22" fill="#31564f">FIELD NOTE 01 / PROTECTED MODE</text>
-  <text class="mono" x="1524" y="126" font-size="22" fill="#31564f" text-anchor="end">LIVE ACCEPTANCE TEST</text>
-  <text class="display" x="72" y="223" font-size="85" fill="#152728" letter-spacing="-2">One question. Two identities.</text>
-  <text class="sans" x="78" y="279" font-size="30" fill="#31564f">Foundry IQ + Azure AI Search retrieve under the signed-in user’s permissions.</text>
-  <g class="mono" font-size="20" fill="#36584f">
-    <text x="76" y="367">01 / QUERY</text>
-    <text x="632" y="367">02 / CALLER</text>
-    <text x="1067" y="367">03 / HOSTED RESPONSE</text>
+  <rect width="1600" height="900" fill="#101c1f"/>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+
+  <text class="display" x="70" y="94" font-size="54" fill="#faf2dc" letter-spacing="-1">One question. Two identities. One label.</text>
+  <text class="sans" x="70" y="138" font-size="26" fill="#add2c6">The model doesn't get a vote. Search checks the label against the signed-in user.</text>
+
+  <!-- Question -->
+  <rect x="70" y="206" width="250" height="176" rx="10" fill="#e8c86f"/>
+  <text class="mono" x="195" y="248" font-size="15" fill="#182627" text-anchor="middle" style="letter-spacing:3px">SAME QUERY</text>
+  <text class="display" x="195" y="304" font-size="34" fill="#182627" text-anchor="middle">"What's the</text>
+  <text class="display" x="195" y="344" font-size="34" fill="#182627" text-anchor="middle">procedure?"</text>
+  <text class="mono" x="195" y="372" font-size="12" fill="#5c4a14" text-anchor="middle" style="letter-spacing:2px">ILLUSTRATIVE</text>
+
+  <!-- Pipeline -->
+  <path d="M320 294H400" stroke="#74958e" stroke-width="4" marker-end="url(#nb)"/>
+  <rect x="402" y="206" width="460" height="176" rx="10" fill="#152728" stroke="#709a91" stroke-width="2"/>
+  <text class="mono" x="632" y="244" font-size="17" fill="#e8c86f" text-anchor="middle" style="letter-spacing:3px">HOSTED AGENT + FOUNDRY IQ</text>
+  <text class="sans" x="632" y="284" font-size="21" fill="#e1ebe0" text-anchor="middle">User's delegated Search token</text>
+  <text class="sans" x="632" y="314" font-size="21" fill="#e1ebe0" text-anchor="middle">travels with every request</text>
+  <rect x="436" y="334" width="392" height="30" rx="4" fill="#0f1c1e" stroke="#709a91"/>
+  <text class="mono" x="632" y="355" font-size="14" fill="#9ce3ce" text-anchor="middle" style="letter-spacing:1px">AZURE AI SEARCH · PURVIEW-LABELED INDEX</text>
+
+  <!-- Outcomes -->
+  <path d="M862 262H962" stroke="#9ce3ce" stroke-width="4" marker-end="url(#ok)"/>
+  <path d="M862 326H962" stroke="#ff9d79" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#no)"/>
+
+  <g>
+    <rect x="964" y="206" width="566" height="84" rx="10" fill="#0f1c1e" stroke="#9ce3ce" stroke-width="2"/>
+    <rect x="980" y="222" width="108" height="52" rx="5" fill="#9ce3ce"/>
+    <text class="mono" x="1034" y="255" font-size="20" fill="#10211f" text-anchor="middle" style="letter-spacing:2px">USER A</text>
+    <text class="mono" x="1104" y="244" font-size="16" fill="#9ce3ce" style="letter-spacing:1px">LABEL GRANTS ACCESS</text>
+    <text class="sans" x="1104" y="272" font-size="21" fill="#e1ebe0">Test fact + cited document</text>
+    <text class="mono" x="1514" y="246" font-size="13" fill="#9ce3ce" text-anchor="end">HTTP 200</text>
+    <text class="mono" x="1514" y="266" font-size="13" fill="#9ce3ce" text-anchor="end">completed</text>
   </g>
-  <path d="M448 526h84V454h80M532 526v80h80" fill="none" stroke="#31564f" stroke-width="3"/>
-  <path d="m611 448 11 6-11 6zm0 152 11 6-11 6z" fill="#31564f"/>
-  <path d="M957 454h88" stroke="#2f6253" stroke-width="4"/>
-  <path d="m1044 448 11 6-11 6z" fill="#2f6253"/>
-  <path d="M957 606h88" stroke="#925236" stroke-width="4" stroke-dasharray="9 7"/>
-  <path d="m1044 600 11 6-11 6z" fill="#925236"/>
-  <circle cx="532" cy="526" r="7" fill="#925236"/>
-  <rect x="76" y="426" width="372" height="200" rx="6" fill="#182c2c"/>
-  <text class="mono" x="104" y="474" font-size="19" fill="#ebcc77">ILLUSTRATIVE QUERY</text>
-  <text class="display" x="103" y="529" font-size="43" fill="#fcf1da">“What’s the</text>
-  <text class="display" x="103" y="576" font-size="43" fill="#fcf1da">procedure?”</text>
-  <rect x="632" y="398" width="325" height="112" rx="6" fill="#d9e8d7" stroke="#528272" stroke-width="2"/>
-  <rect x="632" y="550" width="325" height="112" rx="6" fill="#f1ddcb" stroke="#a16b4d" stroke-width="2"/>
-  <g class="sans" font-size="30" fill="#152728">
-    <text x="660" y="444">Allowed test user</text>
-    <text x="660" y="596">Denied test user</text>
+  <g>
+    <rect x="964" y="298" width="566" height="84" rx="10" fill="#1d1613" stroke="#ff9d79" stroke-width="2"/>
+    <rect x="976" y="304" width="554" height="72" fill="url(#hatch)"/>
+    <rect x="980" y="314" width="108" height="52" rx="5" fill="#ff9d79"/>
+    <text class="mono" x="1034" y="347" font-size="20" fill="#2a1713" text-anchor="middle" style="letter-spacing:2px">USER B</text>
+    <text class="mono" x="1104" y="336" font-size="16" fill="#ffb69b" style="letter-spacing:1px">NO PERMISSION GRANT</text>
+    <text class="sans" x="1104" y="364" font-size="21" fill="#faf2dc">No documents returned. Politely.</text>
+    <text class="mono" x="1514" y="338" font-size="13" fill="#ffb69b" text-anchor="end">HTTP 200</text>
+    <text class="mono" x="1514" y="358" font-size="13" fill="#ffb69b" text-anchor="end">completed</text>
   </g>
-  <g class="mono" font-size="17">
-    <text x="660" y="480" fill="#31564f">LABEL GRANTS ACCESS</text>
-    <text x="660" y="632" fill="#804528">NO PERMISSION GRANT</text>
+
+  <!-- Control -->
+  <rect x="402" y="426" width="1128" height="86" rx="10" fill="#152728" stroke="#709a91" stroke-width="2"/>
+  <text class="mono" x="430" y="460" font-size="17" fill="#e8c86f" style="letter-spacing:3px">CONTROL</text>
+  <text class="sans" x="430" y="494" font-size="23" fill="#e1ebe0">The unlabeled document (different fact) never showed up in an answer. "No label" is not "no problem."</text>
+
+  <!-- Also checked -->
+  <text class="mono" x="70" y="590" font-size="18" fill="#add2c6" style="letter-spacing:4px">ALSO CHECKED, ALL REJECTED</text>
+  <g>
+    <rect x="70" y="612" width="470" height="118" rx="10" fill="#0f1c1e" stroke="#709a91"/>
+    <text class="mono" x="94" y="654" font-size="19" fill="#9ce3ce" style="letter-spacing:1px">MISSING DELEGATION</text>
+    <text class="sans" x="94" y="690" font-size="20" fill="#e1ebe0">No user token, no answer.</text>
+    <text class="sans" x="94" y="716" font-size="20" fill="#e1ebe0">The agent doesn't guess who you are.</text>
+
+    <rect x="565" y="612" width="470" height="118" rx="10" fill="#0f1c1e" stroke="#709a91"/>
+    <text class="mono" x="589" y="654" font-size="19" fill="#9ce3ce" style="letter-spacing:1px">STATEFUL REQUESTS</text>
+    <text class="sans" x="589" y="690" font-size="20" fill="#e1ebe0">store=true requests are</text>
+    <text class="sans" x="589" y="716" font-size="20" fill="#e1ebe0">refused. No replaying secrets.</text>
+
+    <rect x="1060" y="612" width="470" height="118" rx="10" fill="#0f1c1e" stroke="#709a91"/>
+    <text class="mono" x="1084" y="654" font-size="19" fill="#9ce3ce" style="letter-spacing:1px">ANONYMOUS BLOB READ</text>
+    <text class="sans" x="1084" y="690" font-size="20" fill="#e1ebe0">Denied. No back door around</text>
+    <text class="sans" x="1084" y="716" font-size="20" fill="#e1ebe0">the agent to the file itself.</text>
   </g>
-  <rect x="1067" y="398" width="457" height="112" rx="6" fill="#204839"/>
-  <rect x="1067" y="550" width="457" height="112" rx="6" fill="#673f32"/>
-  <g class="mono" font-size="17">
-    <text x="1096" y="436" fill="#bce6c7">HTTP 200 / COMPLETED</text>
-    <text x="1096" y="588" fill="#ffe0bf">HTTP 200 / COMPLETED</text>
-  </g>
-  <g class="sans" font-size="31" fill="#fcf1da">
-    <text x="1096" y="480">Test fact + cited document</text>
-    <text x="1096" y="632">No documents returned</text>
-  </g>
-  <rect x="76" y="719" width="1448" height="58" fill="#e7d5ad"/>
-  <text class="mono" x="102" y="756" font-size="18" fill="#563d28">CONTROL</text>
-  <text class="sans" x="247" y="756" font-size="24" fill="#283f36">Unlabeled document not disclosed. No fallback to a less restricted index.</text>
-  <text class="mono" x="76" y="860" font-size="18" fill="#31564f">AZURE / PART II</text>
-  <text class="mono" x="1524" y="860" font-size="18" fill="#31564f" text-anchor="end">QUERY-TIME PROOF, NOT ENCRYPTION PROOF</text>
+
+  <!-- Honesty strip -->
+  <rect x="70" y="772" width="1460" height="86" rx="10" fill="#2a2313" stroke="#e8c86f" stroke-opacity=".6"/>
+  <text class="mono" x="94" y="806" font-size="17" fill="#e8c86f" style="letter-spacing:3px">QUERY-TIME PROOF, NOT ENCRYPTION PROOF</text>
+  <text class="sans" x="94" y="840" font-size="21" fill="#f1e9d2">Disposable test environment, same-tenant users. Says nothing about the file at rest or a production app's sign-in.</text>
 </svg>

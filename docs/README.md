@@ -8,7 +8,7 @@ user/session continuity such as preferences or workflow context.
 
 This directory is uploaded to public Blob storage in sample mode. Do not put
 restricted documents here. Use the private source configured in
-[Protect documents with Microsoft Purview](../README.md#protect-documents-with-microsoft-purview).
+[Protect documents with Microsoft Purview](../guides/purview.md).
 
 ## Default content
 
