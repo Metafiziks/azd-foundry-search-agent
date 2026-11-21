@@ -1,569 +1,194 @@
 # azd-foundry-search-agent
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template)
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Metafiziks/azd-foundry-search-agent)
 
-An [Azure Developer CLI (azd)](https://aka.ms/azd) template that deploys an **Azure AI Foundry hosted agent** backed by your own document corpus. Ask questions in natural language — the agent synthesizes answers from your documents and cites the source files with direct links. Includes a built-in **automated evaluation suite** that scores every deployment on faithfulness, answer relevance, citation accuracy, latency, and memory recall using GPT-5 as an LLM judge, plus an **ML observability layer** with Azure AI Search semantic ranking, Foundry Memory telemetry, IsolationForest anomaly detection, and HHEM hallucination scoring backed by Log Analytics KQL for alerting.
+An [Azure Developer CLI](https://aka.ms/azd) template that deploys an **Azure AI Foundry hosted agent** over your own documents. Ask a question, get a synthesized answer with cited source links. One `azd up` provisions everything, runs an LLM-judged evaluation suite, and trains an anomaly detector on the agent's own retrieval telemetry. One `azd down --purge` removes it.
 
 ```
 Agent: What should a floor supervisor do when equipment fails?
 
-[search-agent] Here's a practical sequence broken down by safety, quality,
-and maintenance...
+Here's a practical sequence broken down by safety, quality, and maintenance...
 
 Sources:
 - [Lockout Tagout Procedure](https://....blob.core.windows.net/docs/safety/lockout_tagout_procedure.txt)
 - [Hydraulic Press Troubleshooting Guide](https://....blob.core.windows.net/docs/maintenance/hydraulic_press_troubleshooting.txt)
-- [Finished Goods Defect Classification Standard](https://....blob.core.windows.net/docs/quality/finished_goods_defect_standard.txt)
 ```
-
-## What it deploys
-
-| Resource | Purpose |
-|---|---|
-| Azure AI Foundry | Hosts the agent and gpt-5 model deployment |
-| Azure AI Foundry Memory Store (preview) | Stores scoped user/session memories for continuity |
-| Azure AI Search | Indexes documents and serves semantic search |
-| Azure Blob Storage | Stores the document corpus (public read for citation links) |
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    subgraph deploy["azd up"]
+        direction TB
+        D1["provision<br/>Foundry · Search · Blob · Log Analytics"] --> D2["postprovision<br/>models · index · memory store"]
+        D2 --> D3["deploy<br/>hosted agent via remote_build"]
+        D3 --> D4["postdeploy<br/>RBAC · evals · train IsolationForest"]
+    end
+
+    U([User]) --> A["Foundry hosted agent<br/>GPT-5 · Python"]
+    A -->|"search_knowledge_base()"| S[("Azure AI Search<br/>semantic ranking")]
+    S -->|indexer, every 2h| B[("Blob Storage<br/>docs/")]
+    A <-->|"preferences & continuity"| M[("Foundry Memory Store<br/>preview")]
+    A -->|"retrieval features"| IF["IsolationForest<br/>anomaly score"]
+    IF -.->|"model.pkl from private Blob"| B2[("Blob<br/>models/")]
+    A -->|"telemetry via DCE"| L[("Log Analytics<br/>AgentTelemetry_CL")]
+    E["Eval runner<br/>GPT-5 judge + HHEM"] -->|"calls agent"| A
+    E --> L
+    L -->|"KQL alerts · retrain"| B2
 ```
-User question
-     │
-     ▼
-Foundry Hosted Agent (Python, remote_build)
-     │
-     ├── Foundry Memory Store (preview)
-     │       user/session preferences and workflow continuity
-     │
-     │  calls search_knowledge_base()
-     ▼
-Azure AI Search  ◄── indexes every 2 hours
-     │
-     ▼
-Azure Blob Storage  (docs/ container, public read)
-```
 
-The agent runs entirely in Foundry's hosting infrastructure — no container registry or ACA environment to manage. Its managed identity is granted `Search Index Data Reader` for AI Search and Foundry Memory RBAC (`Foundry User` and `Cognitive Services OpenAI User`) automatically at deploy time.
+The agent runs entirely in Foundry hosting: no container registry or Container Apps environment. Its managed identity gets `Search Index Data Reader`, Foundry/OpenAI roles for memory, and telemetry/model-artifact roles automatically.
 
-Memory is intentionally separate from document retrieval. Azure AI Search remains the source of truth for procedures and citations; Foundry Memory only supplies scoped continuity such as stable user preferences, session context, or workflow hints.
-
-## Prerequisites
-
-- [Current Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd) with the `microsoft.foundry` extension (includes the Foundry Projects and Agents providers)
-- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli)
-- Azure subscription with **gpt-5 GlobalStandard quota** in `eastus2`, or set `AZURE_AI_MODEL_NAME`, `AZURE_AI_MODEL_VERSION`, and `AZURE_AI_MODEL_CAPACITY` with `azd env set` to use another supported GlobalStandard model with quota. For example, `gpt-5-mini` version `2025-08-07` can be used to smoke-test protected retrieval.
-
-Install the azd extension if you haven't already:
-
-```bash
-azd extension install microsoft.foundry
-```
+**Memory is not the source of truth.** Azure AI Search supplies procedures and citations. Memory Store only supplies scoped continuity (preferences, workflow context), so "I like short answers" can never change a lockout procedure.
 
 ## Quick start
 
+**Prerequisites:** [azd](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd) with the `microsoft.foundry` extension, [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), and a subscription with **gpt-5 GlobalStandard quota** in `eastus2` (or set `AZURE_AI_MODEL_NAME`, `AZURE_AI_MODEL_VERSION`, `AZURE_AI_MODEL_CAPACITY` for another model).
+
 ```bash
-git clone https://github.com/Metafiziks/azd-foundry-search-agent
-cd azd-foundry-search-agent
-
-azd auth login
-az login
-
+azd extension install microsoft.foundry
+git clone https://github.com/Metafiziks/azd-foundry-search-agent && cd azd-foundry-search-agent
+azd auth login && az login     # sign in to both as the SAME identity
 azd up
 ```
 
-`azd up` runs the full pipeline. Hosted build, RBAC propagation, and the evaluation suite can take several minutes each:
-
-| Step | What happens |
+| Stage | What happens |
 |---|---|
-| Provision | Creates AI Foundry account + project, AI Search, Blob Storage |
-| Post-provision | Deploys gpt-5, uploads `docs/` to blob, creates search index + indexer, waits for Foundry data plane |
-| Deploy | Packages and deploys the hosted agent via `remote_build` |
-| Post-deploy | Grants the hosted agent data access, runs generated evaluations, and trains the retrieval anomaly model |
+| Provision | Foundry account + project, AI Search, Blob Storage |
+| Post-provision | Deploys gpt-5 and `text-embedding-3-small`, uploads `docs/`, builds index + indexer, creates the Memory Store (and proves it works) |
+| Deploy | Packages and deploys the hosted agent |
+| Post-deploy | Grants the agent its roles, waits for RBAC, runs generated evals, trains the anomaly model |
 
-## Automated evaluations
-
-The template includes a built-in eval suite that runs automatically after each `azd up`:
-
-| Metric | Threshold | How it's measured |
-|---|---|---|
-| Faithfulness | ≥ 0.60 | LLM judge: claims grounded in the reference evidence |
-| Answer Relevance | ≥ 0.75 | LLM judge: answer addresses the question |
-| Citation Recall | ≥ 0.60 | Expected source doc appeared in citations |
-| Keyword Recall | ≥ 0.65 | Key phrases from expected answer found in response |
-| p95 Latency | ≤ 45,000ms | Wall-clock time for agent response |
-| Memory Recall | case-level | Two-turn recall case: first turn stores a preference, second turn asks for it |
+Hosted build, RBAC propagation, and evals take several minutes each. Test it:
 
 ```bash
-# Run evals standalone (agent must already be deployed)
-bash scripts/eval.sh
-
-# Deterministic metrics only (no LLM judge, faster)
-bash scripts/eval.sh --no-judge
+azd ai agent invoke search-agent '{"messages":[{"role":"user","content":"What documents are available?"}]}'
 ```
 
-**Keeping evals in sync with your docs:**
+The CLI reuses conversation history between invokes; use the portal playground link from `azd up` for a fresh session.
 
-When you update `docs/`, regenerate the eval cases before re-running:
+Tear down (the Cognitive Services account is soft-deleted without `--purge`, which blocks reusing the environment name for 48 hours):
 
 ```bash
-eval $(azd env get-values)
-python3 scripts/generate_eval_cases.py   # reads docs/, writes tests/eval_cases.json
-bash scripts/eval.sh
+azd down --force --purge
 ```
-
-In sample mode, `azd up` generates two cases per `.txt` document plus the memory case. The post-deploy hook saves the generated suite and its results under `.azure/<env>/evals/` without changing the checked-in suite. Missing generated cases, failed agent calls, or missing required HHEM scores fail the evaluation.
-
-The generator always appends `memory-preference-recall`, a two-turn memory case. If `MEMORY_ENABLED=true` and a `MEMORY_STORE_NAME` exists, evals exercise managed memory with scoped `x-agent-user-id` / `x-memory-user-id` headers. If memory preview provisioning is unavailable and `MEMORY_OPTIONAL=true`, the memory case is marked skipped rather than failing unrelated RAG evals.
-
-For quota-constrained Foundry deployments, the eval runner supports `EVAL_AGENT_TIMEOUT_SECONDS`, `EVAL_AGENT_ATTEMPTS`, `EVAL_INTER_CASE_WAIT_SECONDS`, `EVAL_WARMUP_ENABLED`, and `EVAL_WARMUP_QUESTION`. `postdeploy.sh` also honors `POSTDEPLOY_EVAL_ARGS` and `BASELINE_RUNS`; use `BASELINE_RUNS=0` to skip additional runs if enough runtime retrieval telemetry already exists.
-
-## CI/CD (GitHub Actions)
-
-Copy the workflow files to activate them:
-
-```bash
-mkdir -p .github/workflows
-cp workflows/*.yml .github/workflows/
-git add .github/workflows && git commit -m "Activate CI workflows" && git push
-```
-
-Required secrets (`Settings → Secrets and variables → Actions`):
-
-| Secret | Value |
-|---|---|
-| `AZURE_CLIENT_ID` | App registration client ID (federated credentials) |
-| `AZURE_TENANT_ID` | Azure tenant ID |
-| `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
-
-Required variables:
-
-| Variable | Value |
-|---|---|
-| `AZURE_ENV_NAME` | Your `azd` environment name |
-| `AZURE_LOCATION` | Azure region (default: `eastus2`) |
-
-**Workflow behavior:**
-
-- `deploy.yml` — triggered on push; re-uploads docs and re-indexes if `docs/` changed; redeploys agent if `src/` or `scripts/` changed; runs evals after deploy
-- `run-evals.yml` — triggered weekly (Monday 6am UTC) and on-demand; runs evals against the deployed agent
 
 ## Bring your own documents
 
-The default `sample` mode uses publicly readable Blob citation URLs. Use it only
-for public documents. For an internal knowledge base, use the protected mode below.
+Replace `docs/` with your own `.txt`, `.pdf`, `.docx`, or `.md` files (subfolders become metadata), adjust `INSTRUCTIONS` in `src/agent/main.py`, and re-run `azd up` (or `azd deploy` for code-only changes). Sample mode serves **publicly readable** Blob citation URLs, so use it only for public documents. For internal knowledge bases use [Purview-protected mode](guides/purview.md): sensitivity-label-aware retrieval under the signed-in user's own permissions, no public Blob access, no keys.
 
-1. Replace the files in `docs/` with your own content. Subdirectory structure is preserved as metadata (e.g., `docs/safety/`, `docs/hr/`, `docs/legal/`).
-2. Supported formats: `.txt`, `.pdf`, `.docx`, `.md`
-3. Re-run `azd up` to re-index and redeploy.
+## Evaluations
 
-Optionally, update the agent system prompt in `src/agent/main.py` to fit your domain:
+Runs automatically after `azd up`, and standalone with `bash scripts/eval.sh` (add `--no-judge` for deterministic metrics only).
 
-```python
-INSTRUCTIONS = """
-You are a knowledgeable assistant that answers questions based on
-[your org]'s documents and procedures.
-...
-"""
+| Metric | Threshold | Measured by |
+|---|---|---|
+| Faithfulness | ≥ 0.60 | GPT-5 judge: claims grounded in reference evidence |
+| Answer relevance | ≥ 0.75 | GPT-5 judge |
+| Citation recall | ≥ 0.60 | Expected source appeared in citations |
+| Keyword recall | ≥ 0.65 | Key phrases from expected answer present |
+| p95 latency | ≤ 45,000 ms | Wall-clock agent response |
+| Memory recall | case-level | Turn 1 states a preference; turn 2 asks for it back |
+
+Sample mode generates two cases per `.txt` document plus the memory case into `.azure/<env>/evals/`. A failed agent call, a `status=failed` response, or a missing HHEM score fails the run; nothing is quietly counted as passing. After editing `docs/`, regenerate with `python3 scripts/generate_eval_cases.py`.
+
+For quota-constrained subscriptions, tune `EVAL_AGENT_TIMEOUT_SECONDS`, `EVAL_AGENT_ATTEMPTS`, `EVAL_INTER_CASE_WAIT_SECONDS`, `EVAL_WARMUP_ENABLED`, `POSTDEPLOY_EVAL_ARGS` (e.g. `--no-judge`), and `BASELINE_RUNS` (`0` skips extra training passes).
+
+## Memory (Foundry Memory Store, preview)
+
+`postprovision.sh` deploys the embedding model, grants `Foundry User` + `Cognitive Services OpenAI User` to the deployer and the project/account identities, creates the store through `azure-ai-projects>=2.3.0`, and proves it works with an embedding-backed **search** and a chat+embedding-backed **write** before enabling memory (the probe retries 401/403 for up to 15 minutes while roles propagate; `MEMORY_PROBE_RETRY_SECONDS`). `postdeploy.sh` then grants the same roles to the agent's hosting identity.
+
+**Memory Store calls run as the caller**, which at runtime is the agent's hosting identity. Without `Foundry User` on that identity every memory read fails in milliseconds with `Identity(object id: …) does not have permissions for …/agents/read`. A new grant took ~4 minutes to take effect in testing, so `postdeploy.sh` waits `RBAC_PROPAGATION_WAIT_SECONDS` (default 300). At runtime a context provider reads memories before each model call and queues updates after the response.
+
+- **Scope:** default `{{$userId}}`. For local or single-tenant use set `MEMORY_SCOPE=user:{memory_user_id}` + `MEMORY_USER_ID`, or `session:{session_id}` for per-session isolation.
+- **Optional by default** (`MEMORY_OPTIONAL=true`): provisioning/runtime failures fall back to RAG-only and the recall eval is **skipped**, not passed. Set `false` to fail fast.
+- Writes take 40-60 s, so they always complete in the background. With `MEMORY_OPTIONAL=false` a failed write makes the *next* request fail instead of blocking the current one.
+- Don't store secrets, credentials, financial data, or precise location.
+- Telemetry columns: `MemoryEnabled_b`, `MemoryReadCount_d`, `MemoryWriteCount_d`, `MemoryLatencyMs_d`, `MemoryStatus_s`.
+
+## ML observability
+
+| Model | Purpose | Where |
+|---|---|---|
+| Azure AI Search semantic ranker | Rerank retrieved documents | AI Search (Standard) |
+| `IsolationForest` | Flag unusual retrieval patterns from a 6-feature vector (score mean/std/entropy, chunk count, reranker mean, search latency) | Private Blob `models/iforest.pkl` |
+| `vectara/hallucination_evaluation_model` (HHEM-2.1) | Score answer faithfulness in evals (not memory recall) | HuggingFace, runs in eval process |
+
+`postdeploy.sh` runs the evals plus extra baseline passes, queries real hosted-agent retrieval rows from Log Analytics, trains IsolationForest once ≥10 rows exist, and uploads it to Blob. The agent loads it on its first retrieval after upload; a running instance keeps its cached model until restart. There is no scheduled retraining: run `gh workflow run retrain-observability.yml` manually (30-day lookback by default).
+
+Telemetry lands in `AgentTelemetry_CL` (`RequestId_s`, `RetrievalScoreMean_d`, `RerankerScoreMean_d`, `ChunkCount_d`, `SearchLatencyMs_d`, `HhemScore_d`, `AnomalyScore_d`, `IsAnomaly_b`, `IsBaseline_b`, plus the memory columns above):
+
+```kql
+AgentTelemetry_CL
+| where TimeGenerated > ago(30d)
+| make-series avg_score=avg(RetrievalScoreMean_d) on TimeGenerated step 1h
+| extend anomalies=series_decompose_anomalies(avg_score)
+| render anomalychart
 ```
 
-## Protect documents with Microsoft Purview
-
-Set `KB_ACCESS_MODE=purview` to use **existing Microsoft Purview sensitivity
-labels** with [Foundry IQ][foundry-iq] (Azure AI Search, Purview integration in public
-preview). The Blob indexer extracts text and labels into a protected index.
-The agent requires a valid label on each returned reference, using the
-annotated index field when the preview API omits reference-level label metadata.
-A Foundry IQ knowledge base retrieves from that index under the signed-in
-user's permissions. The agent uses only individually labeled references to
-ground answers; it never falls back to the sample index or uses the model to
-make access decisions.
-
-1. Use a fresh azd environment in the Purview tenant. Sign in to `az` and
-   `azd` with the same deployment identity, which needs permission to create
-   resources and assign Azure RBAC roles in the environment. If you have
-   subscriptions in multiple tenants, sign in explicitly to the target tenant.
-
-   ```bash
-   az login --tenant <tenant-id>
-   azd auth login --tenant-id <tenant-id>
-   azd env new <unique-environment> --subscription <subscription-id> --location eastus2
-   azd env set KB_ACCESS_MODE purview
-   azd up --no-prompt
-   ```
-
-   For an interactive deployment with the acceptance gate below, use
-   `azd provision` instead of `azd up` for this first step.
-
-   The hooks create dedicated Search and Storage resources in the environment's
-   resource group. Search uses its system-assigned identity and RBAC, not API
-   keys. The `docs` Blob container has no anonymous or shared-key access; Blob
-   soft delete is enabled. The hook configures a Purview-enabled index and
-   Blob indexer, an index-backed knowledge source, and a model-free, extractive
-   Foundry IQ knowledge base. It never uploads the public sample corpus.
-   Post-deploy assigns [Reader and Search Index Data Reader][search-roles]
-   on the dedicated protected Search service for knowledge-base retrieval and
-   schema checks, not elevated read. Don't add unrelated indexes to this service.
-2. Have a tenant administrator approve and assign the
-   [Purview extraction roles][purview-index] to the **Search identity** printed
-   by the provision hook, not to the agent. `azd` cannot grant those tenant
-   permissions. If Purview rejects index provisioning before the grant, rerun
-   `azd up` in the same environment after approval.
-3. Apply Purview labels to supported files **before** ingestion. Use a label
-   whose rights grant extraction only to intended users or groups; a label
-   that only classifies a document does not restrict its audience. Use a local
-   corpus directory **outside** this repo. Give the ingest operator `Storage
-   Blob Data Contributor` on the `docs` container, `Reader` on the Storage
-   account, and `Search Service Contributor` on the dedicated Search service.
-   The deployer already has the Search role. Run:
-
-   ```bash
-   python3 scripts/ingest_purview.py \
-     --subscription <subscription-id> --search-service <protected-search-name> \
-     --index <PURVIEW_SEARCH_INDEX> --storage-account <PURVIEW_STORAGE_ACCOUNT> \
-     --directory /path/to/approved-corpus
-   ```
-
-   The script checks the destination, uploads with Entra authentication, and
-   waits for a new indexer result with processed documents and no errors or
-   warnings. It does not apply labels or establish that a user has access. An
-   empty successful run from initial provisioning is not ingestion. If a
-   run fails, inspect the indexer status before tearing down the environment;
-   use `--show-indexer-error` for the run-level diagnostic in a trusted terminal.
-
-**Connect the existing company app.** Its trusted backend exchanges the
-user's validated Entra token [on behalf of the user][foundry-obo] for a token
-with scope `https://search.azure.com/.default`. The backend calls the Foundry
-Responses endpoint with these headers:
-
-| Header | Value |
-|---|---|
-| `Authorization` | `Bearer <backend Foundry workload token>` |
-| `x-ms-user-identity` | Object ID of the signed-in user from the backend's validated identity |
-| `x-client-search-access-token` | Raw delegated Search access token for that same user, without `Bearer` |
-
-Use Foundry Agent Consumer and the `UserIdentityImpersonation/action`
-permission for the backend workload. Limit invocation of the protected
-agent to trusted backend identities. Don't accept user IDs or Search tokens
-from browser-supplied headers, and don't log or trace them. Send
-`{"input":"<question>","store":false,"background":false}` with no conversation
-or previous response. The backend should check the HTTP and Responses
-statuses, and must not cache protected results or replay previous answers into
-later requests. The agent returns source filenames, not Blob URLs.
-
-**Verify during deployment.** In a fresh Purview test environment, use a
-dedicated local directory containing only two synthetic fixtures: a restricted
-Office document and an unlabeled control with a different fact. Save this
-non-secret JSON outside the checkout; do not put access tokens in it:
-
-```json
-{
-  "directory": "/absolute/path/to/synthetic-fixtures",
-  "allowed_oid": "<approved-user-object-id>",
-  "denied_oid": "<denied-user-object-id>",
-  "labeled_blob": "approved.docx",
-  "unlabeled_blob": "control.docx",
-  "question": "What is the restricted test access code?",
-  "expected": "ORCHID-47",
-  "unlabeled_question": "What is the unlabeled control code?",
-  "unlabeled_expected": "MAPLE-82"
-}
-```
-
-Run initial provisioning so the tenant admin can approve the **Search**
-managed identity. Grant the CLI ingest operator the Blob and Search roles
-listed above. From an interactive terminal with `httpx` installed for
-`python3` (for example, in an active virtual environment), set the gate and
-deploy:
+## CI/CD (optional)
 
 ```bash
-azd env set PURVIEW_ACCEPTANCE_CONFIG /absolute/path/to/purview-acceptance.json
-azd up
+mkdir -p .github/workflows && cp workflows/*.yml .github/workflows/
 ```
 
-The post-deploy hook uploads the two files, requires a fresh successful indexer
-run, then prompts without echo for the trusted backend Foundry token and the
-two users' delegated Search tokens. It fails the deployment command unless the
-agent cites the restricted file and returns the fact for the approved user,
-returns a completed no-document response for the denied user, and does not
-reveal or cite the unlabeled control. It also checks missing delegation,
-stateful requests, and anonymous Blob access. The gate verifies **retrieval
-permissions**, not whether the downloaded file itself is encrypted at rest.
-It does not automatically roll back; tear down a failed test environment
-with the command below. With no config, protected `azd up` provisions only;
-sample-mode behavior is unchanged.
+Secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (federated credentials). Variables: `AZURE_ENV_NAME`, `AZURE_LOCATION`. `deploy.yml` redeploys on push and re-indexes when `docs/` changes; `run-evals.yml` runs weekly (Mon 06:00 UTC) and on demand; `retrain-observability.yml` is manual-only (needs `LOG_ANALYTICS_WORKSPACE_ID` and `BLOB_ACCOUNT_URL`, set by `postprovision.sh`). Set `KB_ACCESS_MODE=purview` as a repo variable to disable the sample jobs.
 
-**Run acceptance separately.** To check a deployed agent after manual corpus
-ingestion, including the expired-token case, run from a terminal:
+## Configuration
 
-```bash
-python3 scripts/test_purview_live.py \
-  --account <foundry-account> --project <foundry-project> \
-  --storage-account <PURVIEW_STORAGE_ACCOUNT> \
-  --allowed-oid <approved-user-object-id> --denied-oid <denied-user-object-id> \
-  --question 'What is the synthetic access-test code?' --expected '<test-code>' \
-  --labeled-blob approved.docx --unlabeled-blob control.docx \
-  --unlabeled-question 'What is the synthetic control code?'
-```
-
-Provide the test backend's Foundry token and the users' delegated Search
-tokens at the hidden prompts, including an expired token for the negative
-case. The check requires a cited answer for the approved user, no answer
-for the denied user or unlabeled control, rejection of missing or expired
-delegation and stateful requests, and denial of anonymous reads. Source
-relabeling and soft deletes only take effect in Search after a successful
-indexer run (every two hours by default).
-For an urgent removal, take the affected index or endpoint out of service until
-the updated results are verified. See [query-time limitations][purview-query],
-including same-tenant users only.
-
-Protected mode skips sample ingestion, Memory Store, and automated sample
-evals. Do not configure content recording for protected requests or put
-restricted files in `docs/`, even in protected mode. If using the optional
-sample GitHub workflows, set repository variable `KB_ACCESS_MODE=purview` to
-disable their deployment and scheduled-eval jobs for this environment.
-
-After a test, run `azd down --force --purge --no-prompt` in that environment
-and verify its resource group is gone. Check any separately created tenant
-test users, labels, or app registrations with the tenant administrator; `azd
-down` does not manage those directory objects.
-
-[purview-index]: https://learn.microsoft.com/azure/search/search-indexer-sensitivity-labels
-[purview-query]: https://learn.microsoft.com/azure/search/search-query-sensitivity-labels
-[foundry-iq]: https://learn.microsoft.com/azure/search/agentic-retrieval-how-to-retrieve
-[search-roles]: https://learn.microsoft.com/azure/search/search-security-rbac
-[foundry-obo]: https://learn.microsoft.com/azure/foundry/agents/how-to/use-on-behalf-of-flow
-
-## Live validation
-
-The November 2026 Azure tests covered both modes in separate disposable deployments:
-
-| Test | Result |
-|---|---|
-| Sample RAG and automated evals | All 12 generated RAG cases passed with memory disabled: 100% citation recall, 80.4% keyword recall, 85.4% faithfulness, 100% answer relevance, and 33.2 s p95 latency. |
-| Sample ML observability | HHEM scored all 12 answers. IsolationForest trained on 96 hosted Search retrieval records, loaded from private Blob Storage, and produced nonzero anomaly scores in Log Analytics. |
-| Sample managed memory | The required-memory run failed before Search. Memory Store returned HTTP 403 with a downstream embedding HTTP 401, while direct Entra-authenticated embedding succeeded. The passing RAG run skipped the recall case. |
-| Protected Purview retrieval | The authorized user retrieved the labeled document with a citation; the unauthorized user and unlabeled control received no protected content. Missing delegation and stateful requests were rejected, and anonymous Blob reads were denied. This test verified query-time enforcement, not file encryption at rest. |
-
-Both deployments were torn down. No active resources remained in either test resource group.
-
-## Test the agent
-
-```bash
-# Basic invocation
-azd ai agent invoke search-agent \
-  '{"messages":[{"role":"user","content":"What documents are available?"}]}'
-
-# Cross-document synthesis
-azd ai agent invoke search-agent \
-  '{"messages":[{"role":"user","content":"Summarize the key safety requirements across all procedures."}]}'
-```
-
-Or open the agent playground link printed at the end of `azd up`.
-
-## Memory layer (preview)
-
-This template uses Azure AI Foundry Agent Service Memory Store when the current SDK/API and subscription support the preview. `postprovision.sh` deploys `text-embedding-3-small`, creates or reuses `MEMORY_STORE_NAME` through `azure-ai-projects>=2.3.0`, and sets the hosted-agent environment. At runtime, a context provider reads relevant memories before each model call and queues memory updates after the response.
-
-**Behavior and limits:**
-
-- Memory is optional by default because the service is in public preview. Set `MEMORY_OPTIONAL=false` to make provisioning/runtime failures fail fast.
-- Memory is scoped separately from RAG. Use it for user preferences and workflow continuity, not for authoritative procedure content.
-- The default scope is `{{$userId}}` for Foundry-hosted identity scoping. For local or single-tenant testing, set `MEMORY_SCOPE=user:{memory_user_id}` and `MEMORY_USER_ID=<stable-id>`. To force per-session isolation, set `MEMORY_SCOPE=session:{session_id}`.
-- Memory writes use the Memory Store update poller. With optional memory enabled, write completion is polled in a background task so response latency is not blocked; set `MEMORY_OPTIONAL=false` to await the poller and fail fast on write errors.
-- Provisioning grants `Foundry User` and `Cognitive Services OpenAI User` on the Foundry account/project to the hosted agent and project identities so Memory Store can read/write and run embedding operations.
-- Avoid storing sensitive personal data, secrets, credentials, financial data, or precise location data. The store is configured to favor stable manufacturing workflow preferences.
-
-Memory-specific telemetry is written to `AgentTelemetry_CL` with `MemoryEnabled_b`, `MemoryReadCount_d`, `MemoryWriteCount_d`, `MemoryLatencyMs_d`, and `MemoryStatus_s` when Log Analytics ingestion is configured.
-
-## Environment variables
-
-These are set automatically by `azd up` and available as azd env values:
+Set with `azd env set <NAME> <value>` before `azd up`.
 
 | Variable | Description |
 |---|---|
-| `AZURE_ENV_NAME` | Environment name — drives all resource names |
-| `AZURE_LOCATION` | Primary Azure region (default: `eastus2`) |
-| `AZURE_SUBSCRIPTION_ID` | Set automatically from `az login` |
-| `AZURE_SEARCH_ENDPOINT` | AI Search service URL |
-| `AZURE_SEARCH_INDEX` | Search index name |
-| `FOUNDRY_PROJECT_ENDPOINT` | Foundry data plane project URL |
-| `AGENT_SEARCH_AGENT_ENDPOINT` | Deployed agent version endpoint |
-| `AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME` | Embedding deployment used by Foundry Memory Store (default `text-embedding-3-small`) |
-| `MEMORY_ENABLED` | Enables Foundry Memory in the hosted agent when `true` |
-| `MEMORY_OPTIONAL` | Allows safe fallback without memory if preview APIs/quotas are unavailable (default `true`) |
-| `MEMORY_STORE_NAME` | Foundry Memory Store name created by `postprovision.sh` |
-| `MEMORY_SCOPE` | Scope template for memory isolation; default `{{$userId}}`, with `{session_id}` and `{memory_user_id}` supported by the local provider |
-| `MEMORY_INCLUDE_STATIC_PROFILE` | Injects static profile memories on every request when `true`; default `false` keeps profile memories limited to memory/preference-style questions so RAG answers remain source-of-truth |
-| `MEMORY_UPDATE_DELAY_SECONDS` | Debounce before memory writes are committed (default `5` for template/eval friendliness) |
+| `AZURE_LOCATION` | Region (default `eastus2`); Search falls back to other regions on capacity errors |
+| `AZURE_AI_MODEL_NAME` / `_VERSION` / `_CAPACITY` | Chat model deployment (default gpt-5, `2025-08-07`) |
+| `AZURE_AI_EMBEDDING_MODEL_DEPLOYMENT_NAME` | Embedding deployment for Memory Store (default `text-embedding-3-small`) |
+| `KB_ACCESS_MODE` | `sample` (default) or `purview` |
+| `MEMORY_ENABLED` / `MEMORY_OPTIONAL` | Enable memory / tolerate its failure (default `true` / `true`) |
+| `MEMORY_STORE_NAME` / `MEMORY_SCOPE` | Store name and isolation scope template |
+| `MEMORY_INCLUDE_STATIC_PROFILE` | Inject profile memories on every request (default `false`: only memory/preference-style questions) |
+| `MEMORY_UPDATE_DELAY_SECONDS` | Debounce before writes commit (default `5`) |
+| `MEMORY_PROBE_RETRY_SECONDS` | How long provisioning retries the Memory Store probe through RBAC propagation (default `900`) |
+| `RBAC_PROPAGATION_WAIT_SECONDS` | Post-deploy wait after granting the agent's roles (default `300`; ~4 min was observed) |
+| `EVAL_MEMORY_SETTLE_SECONDS` | Wait between the two memory-recall turns while the background write completes (default `90`) |
 
-Override region before provisioning:
+azd also sets `AZURE_SEARCH_ENDPOINT`, `AZURE_SEARCH_INDEX`, `FOUNDRY_PROJECT_ENDPOINT`, `AGENT_SEARCH_AGENT_ENDPOINT`, and the Log Analytics/Blob values automatically.
 
-```bash
-azd env set AZURE_LOCATION eastus
-azd up
-```
+## Live validation
 
-## Redeployment
+Two separate disposable deployments in November 2026, each removed with `azd down --force --purge` (resource group deleted, Cognitive Services account purged).
 
-After changing documents or agent code:
+| Test | Result |
+|---|---|
+| Sample `azd up`, fresh environment, current code | Provision + deploy + post-deploy completed in about 1 hour with `BASELINE_RUNS=1` (provisioning took 5.4 min). All 13 generated cases completed: faithfulness 0.96, answer relevance 1.00, citation recall 1.00, keyword recall 0.91, **p95 40.1 s**. The two-turn memory recall case **passed with managed memory** (38 s). |
+| Same run, observability | HHEM scored all 12 RAG answers. IsolationForest trained on 34 hosted retrieval samples and uploaded to private Blob; the hosted agent then loaded it and wrote a nonzero anomaly score to Log Analytics. Memory telemetry: 30 reads (avg 0.95 s), 27 completed background writes (avg 34 s, max 61 s), 1 failed write (tolerated in optional mode). |
+| Memory failure, reproduced | Removing the hosting identity's `Foundry User` made every memory read fail in 35-220 ms with `Identity(object id: …) does not have permissions for …/agents/read`. A new grant took 3 min 48 s to take effect; `Foundry User` alone was enough for reads and writes. Reads kept working with no roles on the project and account identities (writes were not tested in that state; the template still grants them, per Microsoft's prerequisites). |
+| Before the memory fixes (first run) | Failed its own gate: **p95 93.6 s** because strict-mode memory writes (avg 40 s, max 63 s) blocked each response, plus one transient `server_error`. Memory recall passed but took 158 s. |
+| Protected Purview retrieval (earlier, separate environment) | The authorized user retrieved the labeled document with a citation; the unauthorized user and unlabeled control received no protected content. Missing delegation and stateful requests were rejected, and anonymous Blob reads were denied. This verified query-time enforcement, not file encryption at rest. Not re-run in the latest session. |
 
-```bash
-azd up          # full reprovision + redeploy
-# or
-azd deploy      # agent code changes only (skip infra)
-```
+Run 1 used `MEMORY_OPTIONAL=false`; run 2 used the defaults.
 
-## Cleanup
-
-```bash
-azd down --purge
-```
-
-> **Note:** `--purge` permanently deletes the Cognitive Services account. Without it, the account is soft-deleted and the same environment name cannot be reused for 48 hours.
-
-## Comparison across cloud providers
-
-| | This template (Azure) | [AWS](https://github.com/Metafiziks/aws-bedrock-agent) | [GCP](https://github.com/Metafiziks/gcp-search-agent) |
-|---|---|---|---|
-| Provision | `azd provision` | `bash scripts/provision.sh` | `bash scripts/provision.sh` |
-| LLM | GPT-5 (Azure AI Foundry) | Amazon Nova Lite (Bedrock) | Gemini 2.5 Flash (Vertex AI) |
-| Agent SDK | AI Foundry hosted agent | Bedrock Agents (managed) | Google ADK + Cloud Run |
-| RAG | Azure AI Search | Bedrock Knowledge Bases | Vertex AI Search Enterprise |
-| Vector store | Azure AI Search (built-in) | OpenSearch Serverless | Vertex AI Search (built-in) |
-| Auth | Azure OIDC | GitHub OIDC | Workload Identity Federation |
-| Eval judge | GPT-5 | Amazon Nova Pro | Gemini 2.5 Flash |
-| Teardown | `azd down` | `bash scripts/teardown.sh` | `bash scripts/teardown.sh` |
 
 ## Troubleshooting
 
-**`azd deploy` fails with `Project not found`**
-The Foundry data plane takes a few minutes to initialize after provisioning. Re-run `azd deploy` — the post-provision script waits for readiness, but `azd deploy` run in isolation does not.
+| Symptom | Fix |
+|---|---|
+| `azd deploy` → `Project not found` | The Foundry data plane needs a few minutes after provisioning. Re-run `azd deploy`. |
+| Search capacity error | `postprovision.sh` retries `eastus`, `westus2`, and others automatically. |
+| `ServiceDeleting` on Search | Re-running `azd up` right after `azd down`; it retries with backoff. Wait and re-run. |
+| `azd auth login --check-status` says logged in but `azd up` says *Login expired* | The refresh token expired after 90 days idle. Run `azd auth login` again. |
+| Memory eval skipped | Check `MEMORY_ENABLED=true`, `MEMORY_STORE_NAME`, and the embedding deployment. With `MEMORY_OPTIONAL=true` the template continues RAG-only. |
+| Memory 401/403, or `does not have permissions for …/agents/read` in `azd ai agent monitor search-agent` | The caller needs `Foundry User` on the Foundry account: the agent's hosting identity at runtime, the deployer during provisioning. Role grants take ~4 minutes to take effect. Re-run `azd provision`/`azd deploy`; grant errors are now printed, not hidden. |
+| Evals time out or 500/503 | Cold start or quota. Raise `EVAL_AGENT_TIMEOUT_SECONDS`, add `EVAL_INTER_CASE_WAIT_SECONDS`, or use `POSTDEPLOY_EVAL_ARGS=--no-judge`. |
+| Search finds the document but the agent says it can't answer | Extractive captions can omit the procedure. The agent passes bounded indexed text alongside captions; the eval runner must not override the agent's model. |
 
-**AI Search capacity error**
-`eastus2` may be capacity-constrained. The post-provision script automatically tries `eastus`, `westus2`, and other regions in sequence.
+## Comparison across clouds
 
-**`ServiceDeleting` error on Search**
-Occurs when re-running `azd up` soon after `azd down`. The script retries with exponential backoff — wait a few minutes and re-run.
-
-**Agent returns stale responses in CLI**
-The CLI reuses conversation history across invokes. Use the portal playground link (printed after `azd up`) for a fresh session each time.
-
-**Memory eval is skipped**
-Memory is in Foundry preview. Confirm `MEMORY_ENABLED=true`, `MEMORY_STORE_NAME` is set, and the embedding deployment exists. If provisioning logs show preview API, quota, or RBAC errors and `MEMORY_OPTIONAL=true`, the template continues with RAG-only behavior and marks memory evals skipped.
-
-**Memory writes fail with 401/403**
-Grant the deployed agent hosting identity `Cognitive Services OpenAI User` on the Foundry account/project scope. `postdeploy.sh` attempts this automatically after discovering the hosting identity.
-
-**Memory Store exists but embedding-backed search fails with 401/403**
-Store creation and static reads do not verify model access. The provisioning hook runs a read-only embedding-backed search in a fresh scope before enabling memory. In a live Entra-only account, direct embedding requests succeeded, but the Memory Store preview returned `403 forbidden` with a downstream embedding `401 Authentication`. If this persists with the documented project identity and roles, investigate the Foundry service-side authentication with Azure support. Keep key authentication disabled; use `MEMORY_OPTIONAL=true` for a deployment that can continue without memory.
-
-**Generated evals timeout or hit transient 500/503**
-Foundry hosted agents can be cold-started or quota constrained. Increase `EVAL_AGENT_TIMEOUT_SECONDS`, add `EVAL_INTER_CASE_WAIT_SECONDS`, keep warmup enabled, or run `POSTDEPLOY_EVAL_ARGS=--no-judge` when validating deterministic RAG/memory behavior separately from judge-model availability. The runner still fails real answer-quality issues instead of marking failed responses as passing.
-
-**Search finds the right document but the agent says it cannot answer**
-Semantic ranking selects the documents; an extractive caption alone may omit the relevant procedure. In sample mode, the agent passes bounded indexed document text to the model, with the caption as a relevance hint for longer documents. The eval runner calls the agent-specific Responses URL without overriding the agent's configured model.
-
----
-
-## ML Observability
-
-Beyond pass/fail eval scores, this template ships a production-ready ML observability layer that runs alongside the Foundry hosted agent and learns what "healthy" looks like for your specific document corpus.
-
-### Architecture
-
-```
-Request
-  │
-  ▼
-Foundry Hosted Agent
-  │
-  ├── Azure AI Search  ──→  Semantic ranking (QueryType.SEMANTIC)
-  │   (built-in)              Extracts @search.score + @search.reranker_score
-  │                           No extra API call — semantic tier included in Standard SKU
-  │
-  ├── IsolationForest  ──→  Anomaly score from 6-d feature vector
-  │   (loaded from Blob)      [retrieval_mean, retrieval_std, retrieval_entropy,
-  │                            chunk_count, reranker_mean, search_latency_ms]
-  │
-  └── Log Analytics Sink  ──→  AgentTelemetry_CL custom log table
-                                (DCE ingest via azure-monitor-ingestion SDK)
-                                → KQL queries + series_decompose_anomalies()
-```
-
-### ML Models
-
-| Model | Type | Purpose | Location |
-|-------|------|---------|----------|
-| Azure AI Search Semantic Ranker | Cross-encoder reranker | Re-rank retrieved docs by semantic relevance | AI Search (Standard tier) |
-| `IsolationForest` | Unsupervised anomaly detector | Flag unusual retrieval patterns | Blob Storage `models/iforest.pkl` |
-| `vectara/hallucination_evaluation_model` (HHEM-2.1) | Hallucination classifier | Score answer faithfulness in evals | HuggingFace Hub |
-
-### Auto-training
-
-The `postdeploy.sh` script:
-1. Runs the main evaluation, then optional extra passes to collect more Search traffic.
-2. Queries actual hosted Search retrieval rows in `AgentTelemetry_CL` for the six features used by the hosted scorer: score mean, standard deviation, entropy, chunk count, reranker mean, and search latency.
-3. Trains IsolationForest once at least ten retrieval rows are available and uploads `iforest.pkl` to the private Blob Storage `models` container. The upload identity needs contributor access to that container; the hosted agent only needs reader access.
-4. The hosted agent loads the model on its first retrieval after the artifact is available. An instance that already loaded a model uses the cached model until restart.
-
-HHEM runs in the eval process, comparing each RAG answer against its expected source documents. It does not score memory recall.
-
-### Log Analytics Schema (AgentTelemetry_CL)
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `TimeGenerated` | datetime | Ingestion timestamp |
-| `RequestId_s` | string | Unique request UUID |
-| `RetrievalScoreMean_d` | real | Mean Azure AI Search relevance score |
-| `RerankerScoreMean_d` | real | Mean semantic reranker score |
-| `ChunkCount_d` | real | Number of chunks retrieved |
-| `SearchLatencyMs_d` | real | End-to-end retrieval latency (ms) |
-| `HhemScore_d` | real | HHEM hallucination probability (eval runs only) |
-| `AnomalyScore_d` | real | IForest score (negative = more anomalous) |
-| `IsAnomaly_b` | boolean | True if anomaly detected |
-| `IsBaseline_b` | boolean | True for eval rows from additional baseline passes |
-| `MemoryEnabled_b` | boolean | Whether Foundry Memory was enabled for the row |
-| `MemoryReadCount_d` | real | Number of memory records retrieved/injected |
-| `MemoryWriteCount_d` | real | Number of messages queued for memory extraction |
-| `MemoryLatencyMs_d` | real | Memory read/write operation latency |
-| `MemoryStatus_s` | string | Memory operation status (`read_ok`, `write_queued`, `read_failed`, etc.) |
-
-### KQL Anomaly Queries
-
-```kql
-// Rolling anomaly rate — last 7 days
-AgentTelemetry_CL
-| where TimeGenerated > ago(7d)
-| summarize total=count(), anomalies=countif(IsAnomaly_b == true) by bin(TimeGenerated, 1h)
-| extend anomaly_rate = todouble(anomalies) / total
-| render timechart
-
-// Azure native time-series anomaly detection on retrieval scores
-AgentTelemetry_CL
-| where TimeGenerated > ago(30d)
-| make-series avg_retrieval_score=avg(RetrievalScoreMean_d) on TimeGenerated step 1h
-| extend anomalies=series_decompose_anomalies(avg_retrieval_score)
-| render anomalychart
-
-// HHEM trend — are answers becoming less faithful?
-AgentTelemetry_CL
-| where TimeGenerated > ago(30d)
-| summarize avg_hhem=avg(HhemScore_d) by bin(TimeGenerated, 1d)
-| render timechart
-```
-
-### Manual retraining
-
-There is no scheduled retraining. The `retrain-observability.yml` workflow runs only on manual dispatch. It uses the same six retrieval features as deployment-time training, defaults to a 30-day Log Analytics lookback, and uploads a new `iforest.pkl` to Blob Storage. An agent process with a cached model picks up the replacement after restart. Disabling scheduled retraining does not change initial training during sample-mode deployment.
-
-Required GitHub secrets/variables:
-- `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (OIDC)
-- `LOG_ANALYTICS_WORKSPACE_ID` (set automatically by `postprovision.sh`)
-- `BLOB_ACCOUNT_URL` (set automatically by `postprovision.sh`)
-
-Once the manual-only definition is on the default branch and the workflow is enabled in GitHub Actions, dispatch it with:
-```bash
-gh workflow run retrain-observability.yml
-```
+| | Azure (this repo) | [AWS](https://github.com/Metafiziks/aws-bedrock-agent) | [GCP](https://github.com/Metafiziks/gcp-search-agent) |
+|---|---|---|---|
+| Provision | `azd up` | `bash scripts/provision.sh` | `bash scripts/provision.sh` |
+| LLM | GPT-5 (Foundry) | Amazon Nova Lite | Gemini 2.5 Flash |
+| Agent runtime | Foundry hosted agent | Bedrock Agents | Google ADK + Cloud Run |
+| RAG | Azure AI Search | Bedrock Knowledge Bases | Vertex AI Search |
+| Eval judge | GPT-5 | Nova Pro | Gemini 2.5 Flash |
+| Teardown | `azd down` | `bash scripts/teardown.sh` | `bash scripts/teardown.sh` |

@@ -336,23 +336,48 @@ COG_RESOURCE_ID=$(az cognitiveservices account show \
   --name "$ACCOUNT" --resource-group "$RG" \
   --query id -o tsv)
 PROJECT_RESOURCE_ID="${COG_RESOURCE_ID}/projects/${AZURE_ENV_NAME}"
+
+# Memory Store calls the embedding and chat deployments as the *project's* system-assigned
+# identity. If the project has none, the store can be created but every embedding-backed
+# call fails (HTTP 403 with a downstream 401). Create the identity if it is missing.
+if [ -z "$AI_PROJECT_PRINCIPAL" ] || [ "$AI_PROJECT_PRINCIPAL" = "null" ]; then
+  echo "  Project has no system-assigned identity; enabling it for Memory Store..."
+  AI_PROJECT_PRINCIPAL=$(az rest --method PATCH \
+    --url "https://management.azure.com${PROJECT_RESOURCE_ID}?api-version=2025-04-01-preview" \
+    --body '{"identity":{"type":"SystemAssigned"}}' \
+    --query "identity.principalId" -o tsv 2>/dev/null || true)
+  if [ -z "$AI_PROJECT_PRINCIPAL" ] || [ "$AI_PROJECT_PRINCIPAL" = "null" ]; then
+    echo "  ⚠ Could not enable the project's system-assigned identity; managed memory will likely fail." >&2
+  fi
+fi
+
+# Grant a role, tolerating only "already exists". Any other failure is reported, not hidden.
+grant_role() {
+  local principal="$1" role="$2" scope="$3" ptype="${4:-ServicePrincipal}" out
+  if out=$(az role assignment create --assignee-object-id "$principal" \
+      --assignee-principal-type "$ptype" --role "$role" --scope "$scope" --output none 2>&1); then
+    return 0
+  fi
+  case "$out" in
+    *RoleAssignmentExists*|*"already exists"*) return 0 ;;
+  esac
+  echo "  ⚠ Could not grant '$role' to $principal on ${scope##*/}: ${out##*ERROR: }" >&2
+  return 1
+}
+
 for PRINCIPAL in "$AI_HUB_PRINCIPAL" "$AI_PROJECT_PRINCIPAL"; do
   if [ -n "$PRINCIPAL" ] && [ "$PRINCIPAL" != "null" ]; then
+    GRANT_FAILED=false
     for ROLE_SCOPE in "$COG_RESOURCE_ID" "$PROJECT_RESOURCE_ID"; do
-      az role assignment create \
-        --assignee "$PRINCIPAL" \
-        --role "Foundry User" \
-        --scope "$ROLE_SCOPE" \
-        --output none 2>/dev/null || true
-      az role assignment create \
-        --assignee "$PRINCIPAL" \
-        --role "Cognitive Services OpenAI User" \
-        --scope "$ROLE_SCOPE" \
-        --output none 2>/dev/null || true
+      grant_role "$PRINCIPAL" "Foundry User" "$ROLE_SCOPE" || GRANT_FAILED=true
+      grant_role "$PRINCIPAL" "Cognitive Services OpenAI User" "$ROLE_SCOPE" || GRANT_FAILED=true
     done
-    echo "  ✓ Identity $PRINCIPAL granted Foundry/OpenAI roles for memory"
+    if [ "$GRANT_FAILED" = "false" ]; then
+      echo "  ✓ Identity $PRINCIPAL granted Foundry/OpenAI roles for memory"
+    fi
   fi
 done
+azd env set AZURE_AI_PROJECT_PRINCIPAL_ID "${AI_PROJECT_PRINCIPAL:-}" >/dev/null
 
 # --- Search REST via Python (avoids macOS curl/TLS issues) ---
 echo ""
@@ -496,6 +521,25 @@ azd env set MEMORY_UPDATE_DELAY_SECONDS "$MEMORY_UPDATE_DELAY_SECONDS"
 if [ "${MEMORY_ENABLED:-true}" = "false" ]; then
   echo "  (memory disabled by MEMORY_ENABLED=false)"
 else
+  # Whoever calls the Memory Store needs the Foundry User *data-plane* role; Owner/Contributor
+  # are control-plane only, so a deployer holding just those gets HTTP 403 from the store.
+  # The probe below runs as the deployer, so make sure the deployer has it.
+  DEPLOYER_TYPE=$(az account show --query user.type -o tsv)
+  DEPLOYER_TENANT=$(az account show --query tenantId -o tsv)
+  DEPLOYER_GRAPH=(python3 "$(dirname "$0")/purview_graph.py" --subscription "$AZURE_SUBSCRIPTION_ID" --tenant "$DEPLOYER_TENANT")
+  DEPLOYER_OID=""
+  case "$DEPLOYER_TYPE" in
+    user) DEPLOYER_OID=$("${DEPLOYER_GRAPH[@]}" 2>/dev/null || true); DEPLOYER_PTYPE=User ;;
+    servicePrincipal) DEPLOYER_OID=$("${DEPLOYER_GRAPH[@]}" --app-id "$(az account show --query user.name -o tsv)" 2>/dev/null || true); DEPLOYER_PTYPE=ServicePrincipal ;;
+  esac
+  if [[ "$DEPLOYER_OID" =~ ^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$ ]]; then
+    grant_role "$DEPLOYER_OID" "Foundry User" "$COG_RESOURCE_ID" "$DEPLOYER_PTYPE" \
+      && grant_role "$DEPLOYER_OID" "Cognitive Services OpenAI User" "$COG_RESOURCE_ID" "$DEPLOYER_PTYPE" \
+      && echo "  ✓ Deployer granted Foundry User for the Memory Store probe"
+  else
+    echo "  ⚠ Could not resolve the deployment principal; the Memory Store probe needs it to hold Foundry User." >&2
+  fi
+
   VENV_MEMORY="${HOME}/.azd-memory-venv"
   [ -f "${VENV_MEMORY}/bin/python3" ] || python3 -m venv "${VENV_MEMORY}"
   "${VENV_MEMORY}/bin/pip" install "azure-ai-projects>=2.3.0" azure-identity aiohttp -q

@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">I tried to make my agent leak a secret. It said no. Politely. Twice.</title>
+  <desc id="desc">An editorial cover: one confidential document with a Microsoft Purview label, two ID badges asking the same question. One badge is approved and gets an answer. The other is stamped DENIED and gets no documents.</desc>
+  <defs>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#abd3ce" stroke-opacity=".13" stroke-width="1"/>
+    </pattern>
+    <pattern id="hatch" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <path d="M0 0V14" stroke="#ff9d79" stroke-width="4" stroke-opacity=".32"/>
+    </pattern>
+    <radialGradient id="wash" cx="75%" cy="37%" r="74%">
+      <stop stop-color="#234747"/><stop offset="1" stop-color="#101c1f"/>
+    </radialGradient>
+    <style>
+      .mono{font-family:Menlo,'Courier New',monospace;font-weight:700;letter-spacing:3px}
+      .display{font-family:Baskerville,Georgia,serif;font-weight:700}
+      .sans{font-family:'Avenir Next','Helvetica Neue',sans-serif;font-weight:500}
+    </style>
+  </defs>
+  <path fill="url(#wash)" d="M0 0h1920v1080H0z"/>
+  <path fill="url(#grid)" d="M1000 0h920v1080h-920z"/>
+  <path d="M112 110h1696M112 946h1696" stroke="#74958e" stroke-width="2"/>
+  <path d="M112 110h116" stroke="#e8c86f" stroke-width="6"/>
+  <g class="mono" font-size="24" fill="#add2c6">
+    <text x="112" y="169">THREE CLOUDS / FIELD NOTES</text>
+    <text x="1808" y="169" text-anchor="end">AZURE / PART II</text>
+    <text x="112" y="1006">JEREMIAH WILLIAMS</text>
+    <text x="1808" y="1006" text-anchor="end">NOV 2026</text>
+  </g>
+
+  <text class="display" x="102" y="318" font-size="112" fill="#faf2dc" letter-spacing="-4">I tried to make</text>
+  <text class="display" x="102" y="428" font-size="112" fill="#faf2dc" letter-spacing="-4">my agent leak</text>
+  <text class="display" x="102" y="538" font-size="112" fill="#e8c86f" letter-spacing="-4">a secret.</text>
+  <text class="display" x="102" y="690" font-size="84" fill="#ff9d79" letter-spacing="-2" font-style="italic">It said no.</text>
+  <text class="display" x="102" y="782" font-size="84" fill="#ff9d79" letter-spacing="-2" font-style="italic">Politely. Twice.</text>
+  <path d="M113 828h72" stroke="#e8c86f" stroke-width="4"/>
+  <text class="sans" x="112" y="890" font-size="33" fill="#e1ebe0">Purview labels, two users, and one HTTP 200 that finally meant something.</text>
+
+  <!-- the document -->
+  <g transform="translate(1066 250) rotate(-3 150 220)">
+    <path d="M14 14h300v420H14z" fill="#0c1517" opacity=".8"/>
+    <rect width="300" height="420" rx="6" fill="#f1e9d2"/>
+    <path d="M0 0h300v54H0z" fill="#d9d0b6"/>
+    <text class="mono" x="150" y="36" font-size="18" fill="#3a3a33" text-anchor="middle" style="letter-spacing:3px">APPROVED.DOCX</text>
+    <g fill="#bdb497"><rect x="28" y="92" width="244" height="10"/><rect x="28" y="120" width="200" height="10"/><rect x="28" y="148" width="226" height="10"/><rect x="28" y="176" width="150" height="10"/></g>
+    <rect x="28" y="214" width="244" height="64" rx="3" fill="#182627"/>
+    <text class="mono" x="150" y="244" font-size="14" fill="#9ce3ce" text-anchor="middle" style="letter-spacing:2px">PURVIEW LABEL</text>
+    <text class="mono" x="150" y="266" font-size="17" fill="#e8c86f" text-anchor="middle" style="letter-spacing:2px">RESTRICTED</text>
+    <g fill="#bdb497"><rect x="28" y="310" width="226" height="10"/><rect x="28" y="338" width="180" height="10"/><rect x="28" y="366" width="210" height="10"/></g>
+  </g>
+
+  <!-- approved badge -->
+  <g transform="translate(1410 214) rotate(4 120 160)">
+    <path d="M12 12h250v340H12z" fill="#0c1517" opacity=".8"/>
+    <rect width="250" height="340" rx="10" fill="#152728" stroke="#9ce3ce" stroke-width="2"/>
+    <rect x="18" y="22" width="214" height="44" rx="4" fill="#9ce3ce"/>
+    <text class="mono" x="125" y="52" font-size="18" fill="#10211f" text-anchor="middle" style="letter-spacing:2px">USER A</text>
+    <circle cx="125" cy="130" r="40" fill="#0f1c1e" stroke="#9ce3ce" stroke-width="3"/>
+    <circle cx="125" cy="120" r="13" fill="none" stroke="#9ce3ce" stroke-width="4"/>
+    <path d="M97 154c6-20 50-20 56 0" fill="none" stroke="#9ce3ce" stroke-width="4"/>
+    <text class="mono" x="125" y="212" font-size="19" fill="#9ce3ce" text-anchor="middle" style="letter-spacing:2px">LABEL: GRANTED</text>
+    <path d="M24 228h202" stroke="#709a91" stroke-width="2"/>
+    <text class="mono" x="125" y="262" font-size="16" fill="#e1ebe0" text-anchor="middle" style="letter-spacing:1px">fact + citation</text>
+    <text class="mono" x="125" y="292" font-size="16" fill="#9ce3ce" text-anchor="middle" style="letter-spacing:1px">HTTP 200 completed</text>
+  </g>
+
+  <!-- denied badge -->
+  <g transform="translate(1430 612) rotate(-4 120 160)">
+    <path d="M12 12h250v300H12z" fill="#0c1517" opacity=".8"/>
+    <rect width="250" height="300" rx="10" fill="#152728" stroke="#ff9d79" stroke-width="2"/>
+    <rect x="18" y="22" width="214" height="44" rx="4" fill="#ff9d79"/>
+    <text class="mono" x="125" y="52" font-size="18" fill="#2a1713" text-anchor="middle" style="letter-spacing:2px">USER B</text>
+    <circle cx="125" cy="126" r="38" fill="#0f1c1e" stroke="#ff9d79" stroke-width="3"/>
+    <circle cx="125" cy="116" r="12" fill="none" stroke="#ff9d79" stroke-width="4"/>
+    <path d="M98 148c6-19 48-19 54 0" fill="none" stroke="#ff9d79" stroke-width="4"/>
+    <rect x="24" y="190" width="202" height="62" fill="url(#hatch)"/>
+    <text class="mono" x="125" y="228" font-size="17" fill="#ffb69b" text-anchor="middle" style="letter-spacing:1px">NO DOCUMENTS</text>
+    <g transform="rotate(-10 125 120)">
+      <rect x="28" y="92" width="206" height="62" rx="6" fill="#152728" fill-opacity=".78" stroke="#ff7a52" stroke-width="6"/>
+      <text class="mono" x="131" y="134" font-size="32" fill="#ff7a52" text-anchor="middle" style="letter-spacing:4px">DENIED</text>
+    </g>
+  </g>
+
+  <!-- connectors from document to badges -->
+  <path d="M1380 380H1420" stroke="#9ce3ce" stroke-width="4"/>
+  <path d="M1366 520C1400 600 1410 700 1430 740" fill="none" stroke="#ff9d79" stroke-width="4" stroke-dasharray="9 7"/>
+</svg>

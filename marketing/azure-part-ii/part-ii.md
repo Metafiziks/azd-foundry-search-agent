@@ -1,59 +1,92 @@
-# Same Question. Different Clearance. (Part II)
+# I Tried to Make My AI Agent Leak a Secret. It Said No. Politely. Twice.
 
-*I went back to the Azure agent to see what it would remember, what it would refuse to tell me, and what an HTTP 200 was actually worth.*
+*Part II. Same Azure agent, new hobby: attempting to get it to say things it shouldn't, and then admitting that the "Microsoft bug" I blamed last time had my fingerprints on it.*
 
-In [Part I](https://www.linkedin.com/pulse/ai-evaluated-my-interview-so-i-built-same-agent-three-williams-gvq4c/), a two-and-a-half-hour interview turned into the same manufacturing RAG agent on three clouds. I ended by saying I was going to resist the urge to build a fourth version.
+In [Part I](https://www.linkedin.com/pulse/ai-evaluated-my-interview-so-i-built-same-agent-three-williams-gvq4c/), an AI evaluated my interview, I responded by building the same agent on three clouds, and I swore I wouldn't build a fourth.
 
-Technically, I kept that promise.
+I kept that promise the way people keep a diet: by only touching the Azure one. Then I [gave it memory](https://www.linkedin.com/pulse/i-gave-rag-agents-memory-now-remember-things-which-somehow-even-uytle/), which raised a question I'd been avoiding.
 
-I went back to Azure. The agent could already find a maintenance procedure and cite it. What I hadn’t shown was whether it could tell the difference between *finding* a procedure and being allowed to show it to the person asking.
+The agent can find any document in the corpus. Wonderful. Can it *not* show me one?
 
-So I asked the same question twice. The important part was that I signed in as someone else the second time.
+### Two users. One secret. One decoy.
 
-### Same question. Different clearance.
+The test is rude in its simplicity. Two test users. Two synthetic documents.
 
-I set up two test users and two disposable documents. One document had a Microsoft Purview sensitivity label that granted access to one user but not the other. The second document was unlabeled, which gave me a way to test whether the agent would accidentally treat “no label” as “no problem.”
+Document one is an Office file carrying a Microsoft Purview sensitivity label whose rights allow User A and nobody else. Document two is unlabeled, contains a *different* fact, and exists purely to find out whether the agent treats "no label" as "no problem."
 
-The template provisions dedicated Azure AI Search and private Blob Storage through `azd`. Search indexes the text and labels; Foundry IQ retrieves under the signed-in user’s delegated identity. The hosted agent checks the labels on the references it actually uses. The model doesn’t decide who gets access, and there’s no fallback to a less restricted index if the protected one comes up empty.
+Then I ask both users the same question. The only variable is who's asking.
 
-The first hosted run got the answer wrong in an interesting way. Search and Foundry IQ gave the allowed user the right document, but the preview response put the label in a different field than the agent expected. The agent refused to use the document. Annoying, but I’ll take that over making up an access policy on the spot.
+Here's how the protected mode (`KB_ACCESS_MODE=purview`) is wired. Azure AI Search gets its own dedicated service with RBAC and no API keys. The Blob container has no anonymous or shared-key access. The indexer pulls the text *and the labels* into the index. Foundry IQ retrieves under the signed-in user's delegated token, so Search sees the person, not the agent. The hosted agent only uses references that carry a valid label. There's no fallback to a friendlier index if the protected one comes up empty.
 
-After fixing the parser for that verified source, the deployment check passed. The allowed user got the test fact and a citation. The other user got no documents. The unlabeled control stayed out of the answer.
+The model does not decide who gets access. I wanted that decision made by a system with an audit trail, not by a language model with vibes.
 
-![Diagram of the live Purview test: the same query returned a cited document for the allowed identity and no documents for the denied identity. The unlabeled control was not used.](purview-two-user-test.png)
+### Round one: it refused to help the person it was supposed to help
 
-*Figure 1. Two signed-in users, one question. This tested query-time access in a disposable environment. It didn’t prove file encryption at rest or validate a production application’s sign-in.*
+The first hosted run got the wrong answer in a fascinating way. Search and Foundry IQ handed User A the right document. The preview response put the label in a different field than the agent expected. The agent looked at a document that was perfectly fine, couldn't verify the label where it was looking, and declined to use it.
 
-### I gave the agent a memory. I did not give it a second manual.
+Irritating? Yes. Also the best possible way for it to be wrong. I will take "refuses to use a document it can't verify" over "makes up an access policy on the spot" every day of the week and twice on Mondays. I taught the parser to accept the label from the verified index field and ran it again.
 
-In the sample deployment, Azure AI Search is still where the agent gets facts about the equipment. Foundry Memory Store is for remembering things like a user’s preferred checklist format. Those are different kinds of information. If I say I like short answers, that shouldn’t change the lockout procedure.
+### Round two: same question, different clearance
 
-The preview store uses `text-embedding-3-small`. Memory is scoped to the user and, by default, the session. In optional mode, updates are polled in the background, and reads, writes, and latency are tracked separately from Search. There’s also a two-turn test: tell the agent a preference, then ask a follow-up that depends on it.
+![Diagram of the live Purview test: the same query returns a cited document for the allowed identity and no documents for the denied identity. The unlabeled control was never disclosed. Missing delegation, stateful requests, and anonymous Blob reads were all rejected.](purview-two-user-test.png)
 
-That test passed in an earlier live deployment. In the latest one, the store existed and direct embedding calls worked with Microsoft Entra authentication. The store’s own embedding-backed search returned a `403` with a downstream `401`. Apparently the services were acquainted. They were not on speaking terms.
+*Figure 1. One question, two signed-in users. Query-time access in a disposable environment, not a proof about files at rest.*
 
-I added a readiness probe that makes the store actually do an embedding-backed lookup. I kept key authentication disabled. The passing run below had memory turned off, so the recall case was **skipped**, not passed. The Purview path is separate and stateless; it doesn’t use Memory Store or the sample eval and telemetry pipeline.
+User A got the test fact and a citation to the labeled file. User B got a completed response with no documents. The unlabeled control stayed out of every answer.
 
-### Congratulations on your HTTP 200
+Then I tried to be annoying. A request with no user delegation: rejected. A stateful request, so the agent might remember and replay something: rejected. An anonymous read straight from Blob Storage, to see if there was a back door around the agent to the file itself: denied.
 
-The generated RAG suite uncovered two more ways to be wrong. The hosted URL already selected the agent, but the eval runner was also sending the agent name in `model`, overriding the configured GPT-5 deployment. Then, once the model was reachable, Search ranked the right document and returned a caption that left out the actual procedure. The agent had found the manual and been handed the part that didn’t answer the question.
+Usually I treat an HTTP 200 as a suspect. This time the 200 that says "no documents" *is* the passing grade. It's the first time a successful status code has been the sound of a door being locked.
 
-I removed the model override and kept semantic ranking, but gave the agent bounded text from the indexed documents alongside the captions. I’d already learned the hard way that Foundry can return HTTP 200 with `status=failed` and no answer. The runner now checks for an actual completed response with content before it scores anything.
+What this doesn't prove, because I'd like you to trust the rest: it checks **query-time** access, not whether the file is encrypted at rest. It was a disposable environment with same-tenant users, not a production app's sign-in. And label changes only reach Search after an indexer run, every two hours by default, so this is not a revocation button. For an urgent removal, take the index out of service and verify.
 
-All 12 generated RAG cases completed without errors, and the suite passed without relaxing its thresholds: **100% citation recall, 80.4% keyword recall, 85.4% faithfulness, and 33.2 seconds p95**. That is not a perfect score, and the latency is something I’d want to bring down before putting this in front of a floor supervisor.
+### Why protected mode has no memory
 
-![Live sample scorecard: the suite passed with 12 generated RAG cases completed. Citation recall was 100%, faithfulness was 85.4%, and p95 was 33.2 seconds. Memory recall was skipped.](azure-live-scorecard.png)
+Protected mode is stateless on purpose: no Memory Store, `store=false`, no conversation, nothing to replay. An agent that remembers a restricted answer and hands it to the *next* person isn't remembering. It's leaking with extra steps.
 
-*Figure 2. Sample deployment results. The separate required-memory run hit a Foundry preview authentication error before reaching Search.*
+Memory is for the sample deployment, where the manufacturing docs are public anyway and the worst case is that it knows you like bullet points. Which brings me to the thing I blamed on Microsoft.
 
-### The graphs weren’t there for decoration
+### The Memory Store bug had my fingerprints on it
 
-The GPT-5 judge ran. So did HHEM, which checked the answers against the expected source documents. Log Analytics recorded 96 real Search retrievals. I trained Isolation Forest on six features from those records, uploaded the model to private Blob Storage, and verified the hosted agent loaded it and wrote nonzero anomaly scores back to Log Analytics. A trained model in a storage account is a file. I wanted evidence that the agent had actually used it.
+In my own README I'd written up the Memory Store returning a `403` with a downstream `401` and politely suggested that Azure support take a look. Translation: I blamed Microsoft. Easy, satisfying, and a great way to avoid reading my own scripts.
 
-Initial training still happens during sample deployment. Retraining is now manual. The Sunday cron has been relieved of its duties.
+So I reproduced it. I deleted one role assignment, and the agent's memory reads failed in 35 to 220 milliseconds with a refreshingly blunt message: the agent's hosting identity doesn't have permission to read agents. Not a downstream mystery. A missing role.
 
-Both disposable environments came down with `azd down --force --purge --no-prompt`. I checked that no active resources remained. Ending a demo by verifying that the infrastructure no longer exists is not especially cinematic, but neither is finding it on next month’s bill.
+![Diagram: with Foundry User granted, memory reads take about a second and writes about a minute. Without it, every read fails in milliseconds with a permissions error. A new role grant took 3 minutes 48 seconds to take effect.](memory-who-is-calling.png)
 
-The [Azure template](https://github.com/Metafiziks/azd-foundry-search-agent) and its evaluation criteria are public. The most useful answer the agent gave me this time wasn’t a maintenance procedure. It was what happened when I asked for one as someone who wasn’t supposed to see it.
+*Figure 2. The Memory Store runs as the caller, and at runtime the caller is the agent's own identity.*
 
-Still only three clouds.
+Memory calls run as whoever is calling, and at runtime that's the agent's own hosting identity. It needs `Foundry User`. "It can already read Search" does not count; I checked. And Azure took **3 minutes 48 seconds** to believe me after I granted it.
+
+Then I read my own post-deploy script. When a role grant failed for *any* reason, it printed a cheerful `already assigned`. Not "failed." Not "oops." Already assigned. My script was a very confident intern who has never once said "I don't know."
+
+I can't prove the original 403 had this exact cause. That environment is gone. What I can say is that I can now produce a memory failure on demand by removing one role, and I found a script that would have hidden it. The fix: real error handling, the deployer gets the role before the readiness probe, and the probe now retries through propagation instead of declaring Azure broken on the first try.
+
+**While I was in there: memory was making the agent slow.** The first full run failed its own latency gate: p95 of 93.5 seconds. Reads were fast. Memory *writes* took 40 seconds on average and up to 63, and in strict mode the agent waited for each one to finish before answering you. I had built an assistant that, in the name of reliability, took a minute to remember you like bullet points before replying. The memory-recall eval case alone took 158 seconds.
+
+Writes now finish in the background. Strict mode doesn't block the response; it fails the *next* request if a write died. The same case now takes 38 seconds.
+
+Also, I had deployed gpt-5 with the default capacity and then asked it to answer, judge, and remember all at once. It rate-limited itself. That's not a bug. That's a lifestyle.
+
+### And then I turned it all off and checked
+
+The whole point of a template is that someone else can run it, so I ran it from scratch, with the fixes, as `azd up`. Then I tore it down with `azd down --purge` and checked that it was actually gone.
+
+- 13 generated evals, all completed, no errors. **Faithfulness 0.96, relevance 1.00, citation recall 1.00, keyword recall 0.91.**
+- **p95 latency 40 seconds**, down from 93.5. Still not fast. Under the gate.
+- The memory recall case passed with managed memory on, in 38 seconds instead of 158.
+- The full `azd up` took about an hour, five minutes of which was provisioning. The rest is hosted build, role propagation, and an eval suite that politely waits 60 seconds between questions.
+- IsolationForest trained on 34 real retrievals, and the hosted agent loaded it and wrote a nonzero anomaly score. HHEM scored all 12 answers.
+- Teardown: **about two and a half minutes**, twice (2:28 and 2:14). The resource group was gone and the Cognitive Services account was purged both times. I checked, because finding a forgotten AI Search service on next month's bill is not a character-building experience.
+
+![Live scorecard of the azd up run with fixes: 13 evals, faithfulness 0.96, relevance 1.00, citation recall 1.00, keyword recall 0.91, p95 40 seconds, memory recall passed.](azure-live-scorecard.png)
+
+*Figure 3. Sample deployment, fresh `azd up`. Run 1 (before the memory fixes) is the grey bar.*
+
+Two honesty notes. I ran the sample path end to end this time, not the Purview test; that one needs a tenant admin, labels, and two real people, and it's documented in the repo. And azd's `--check-status` told me I was "logged in" while the next command told me my login had expired in July. Both said it with total confidence. I've worked with LLMs like that.
+
+The [Azure template](https://github.com/Metafiziks/azd-foundry-search-agent) is public, including [the protected mode guide](https://github.com/Metafiziks/azd-foundry-search-agent/blob/main/guides/purview.md) and the evals.
+
+The most useful thing the agent did this month wasn't answering a question. It was refusing to, on purpose, to the right person.
+
+Still three clouds. Still more discreet than the average Slack channel.

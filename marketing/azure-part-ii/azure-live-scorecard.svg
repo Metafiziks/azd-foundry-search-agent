@@ -1,55 +1,72 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
-  <title id="title">Azure live sample scorecard</title>
-  <desc id="desc">All 12 generated RAG cases completed and the suite passed at 100 percent citation recall, 85.4 percent faithfulness and 33.2 seconds p95 latency. Sample observability was verified. The memory recall case was skipped in this run after a separate required-memory run hit an authentication error.</desc>
+  <title id="title">Live scorecard: before and after the memory fixes</title>
+  <desc id="desc">Run 1 failed on latency and one case error. After moving memory writes off the response path and fixing role grants, the fresh azd up run passed: p95 40 seconds versus 93.5, no case errors, memory recall case 38 seconds versus 158. Faithfulness 0.96, relevance 1.00, citation recall 1.00, keyword recall 0.91.</desc>
   <defs>
     <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-      <path d="M40 0H0V40" fill="none" stroke="#adc6bf" stroke-opacity=".1"/>
-    </pattern>
-    <pattern id="hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-      <path d="M0 0V12" stroke="#ffb297" stroke-width="3" stroke-opacity=".36"/>
+      <path d="M40 0H0V40" fill="none" stroke="#abd3ce" stroke-opacity=".10" stroke-width="1"/>
     </pattern>
     <style>
-      .mono{font-family:Menlo,'Courier New',monospace;font-weight:700;letter-spacing:2px}
+      .mono{font-family:Menlo,'Courier New',monospace;font-weight:700}
       .display{font-family:Baskerville,Georgia,serif;font-weight:700}
       .sans{font-family:'Avenir Next','Helvetica Neue',sans-serif;font-weight:500}
     </style>
   </defs>
-  <path d="M0 0h1600v900H0z" fill="#132526"/>
-  <path d="M0 0h1600v900H0z" fill="url(#grid)"/>
-  <path d="M76 78h1448M76 820h1448" stroke="#73968b" stroke-width="2"/>
-  <path d="M76 78h98" stroke="#ebcc77" stroke-width="5"/>
-  <text class="mono" x="76" y="126" font-size="22" fill="#adcebf">FIELD NOTE 02 / SAMPLE MODE</text>
-  <text class="mono" x="1524" y="126" font-size="22" fill="#adcebf" text-anchor="end">LIVE EVAL RUN</text>
-  <text class="display" x="72" y="223" font-size="85" fill="#fcf1da" letter-spacing="-2">What passed. What didn’t.</text>
-  <text class="sans" x="78" y="277" font-size="30" fill="#c6d9cd">Generated questions, unchanged thresholds, no credit for a skipped case.</text>
-  <rect x="76" y="330" width="548" height="311" rx="7" fill="#ebcc77"/>
-  <text class="mono" x="105" y="382" font-size="21" fill="#2f3a2a">GENERATED RAG CASES</text>
-  <text class="display" x="94" y="528" font-size="155" fill="#182a27" letter-spacing="-5">12/12</text>
-  <text class="sans" x="107" y="583" font-size="28" fill="#233a30">Suite passed with memory off</text>
-  <g fill="#344f46">
-    <path d="M109 605h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29zm39 0h29v11h-29z"/>
+  <rect width="1600" height="900" fill="#101c1f"/>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+
+  <text class="display" x="70" y="94" font-size="54" fill="#faf2dc" letter-spacing="-1">Same agent. One memory fix later.</text>
+  <text class="sans" x="70" y="138" font-size="26" fill="#add2c6">Fresh <tspan class="mono" font-size="23">azd up</tspan>, 13 generated evals, then <tspan class="mono" font-size="23">azd down --purge</tspan>.</text>
+
+  <!-- legend -->
+  <rect x="1140" y="62" width="22" height="22" fill="#5d6f6c"/><text class="mono" x="1172" y="80" font-size="17" fill="#b9d1c5">RUN 1 (before)</text>
+  <rect x="1140" y="98" width="22" height="22" fill="#9ce3ce"/><text class="mono" x="1172" y="116" font-size="17" fill="#9ce3ce">FRESH RUN (fixed)</text>
+
+  <!-- Latency panel -->
+  <rect x="70" y="180" width="700" height="360" rx="12" fill="#152728" stroke="#709a91" stroke-width="2"/>
+  <text class="mono" x="96" y="222" font-size="18" fill="#e8c86f" style="letter-spacing:3px">P95 LATENCY · GATE 45 s</text>
+  <!-- scale: 0..100 s => 0..560px  (5.6 px/s) -->
+  <path d="M120 300V500" stroke="#74958e" stroke-width="2"/>
+  <path d="M372 270V488" stroke="#e8c86f" stroke-width="2" stroke-dasharray="8 7"/>
+  <text class="mono" x="372" y="262" font-size="14" fill="#e8c86f" text-anchor="middle">45 s</text>
+  <rect x="120" y="318" width="524" height="56" fill="#5d6f6c"/>
+  <text class="mono" x="136" y="355" font-size="24" fill="#faf2dc">93.6 s</text>
+  <text class="mono" x="654" y="354" font-size="20" fill="#ff9d79">FAIL</text>
+  <rect x="120" y="410" width="224" height="56" fill="#9ce3ce"/>
+  <text class="mono" x="136" y="447" font-size="24" fill="#10211f">40.1 s</text>
+  <text class="mono" x="392" y="446" font-size="20" fill="#9ce3ce">PASS</text>
+  <text class="sans" x="96" y="520" font-size="19" fill="#e1ebe0">Memory writes (~40 s avg, 63 s max) no longer sit on the response path.</text>
+
+  <!-- Memory case panel -->
+  <rect x="830" y="180" width="700" height="170" rx="12" fill="#152728" stroke="#709a91" stroke-width="2"/>
+  <text class="mono" x="856" y="222" font-size="18" fill="#e8c86f" style="letter-spacing:3px">MEMORY RECALL CASE</text>
+  <rect x="856" y="244" width="522" height="34" fill="#5d6f6c"/><text class="mono" x="870" y="269" font-size="20" fill="#faf2dc">158 s</text>
+  <rect x="856" y="296" width="126" height="34" fill="#9ce3ce"/><text class="mono" x="870" y="321" font-size="20" fill="#10211f">38 s</text>
+  <text class="mono" x="1396" y="270" font-size="16" fill="#b9d1c5">passed</text>
+  <text class="mono" x="1000" y="322" font-size="16" fill="#9ce3ce">passed</text>
+
+  <!-- Errors panel -->
+  <rect x="830" y="370" width="700" height="170" rx="12" fill="#152728" stroke="#709a91" stroke-width="2"/>
+  <text class="mono" x="856" y="412" font-size="18" fill="#e8c86f" style="letter-spacing:3px">CASES WITH ERRORS</text>
+  <text class="display" x="856" y="494" font-size="84" fill="#5d6f6c">1</text>
+  <text class="mono" x="930" y="478" font-size="30" fill="#b9d1c5">→</text>
+  <text class="display" x="990" y="494" font-size="84" fill="#9ce3ce">0</text>
+  <text class="sans" x="1076" y="470" font-size="19" fill="#e1ebe0">run 1: transient</text>
+  <text class="sans" x="1076" y="496" font-size="19" fill="#e1ebe0">server_error</text>
+
+  <!-- Quality table -->
+  <rect x="70" y="570" width="1460" height="250" rx="12" fill="#152728" stroke="#709a91" stroke-width="2"/>
+  <text class="mono" x="96" y="612" font-size="18" fill="#e8c86f" style="letter-spacing:3px">ANSWER QUALITY · GPT-5 JUDGE + EXPECTED SOURCES</text>
+  <g class="mono" font-size="17" fill="#b9d1c5">
+    <text x="96" y="660">METRIC</text><text x="520" y="660" text-anchor="end">GATE</text><text x="700" y="660" text-anchor="end">RUN 1</text><text x="880" y="660" text-anchor="end">FRESH</text>
+    <text x="960" y="660">METRIC</text><text x="1300" y="660" text-anchor="end">GATE</text><text x="1400" y="660" text-anchor="end">RUN 1</text><text x="1500" y="660" text-anchor="end">FRESH</text>
   </g>
-  <g class="display" font-size="61" fill="#fcf1da">
-    <text x="654" y="406">100%</text>
-    <text x="654" y="510">85.4%</text>
-    <text x="654" y="616">33.2s</text>
+  <g class="mono" font-size="21" fill="#e1ebe0">
+    <text x="96" y="708">Faithfulness</text><text x="520" y="708" text-anchor="end" fill="#74958e">≥ 0.60</text><text x="700" y="708" text-anchor="end" fill="#8fa5a0">0.90</text><text x="880" y="708" text-anchor="end" fill="#9ce3ce">0.96</text>
+    <text x="96" y="756">Answer relevance</text><text x="520" y="756" text-anchor="end" fill="#74958e">≥ 0.75</text><text x="700" y="756" text-anchor="end" fill="#8fa5a0">1.00</text><text x="880" y="756" text-anchor="end" fill="#9ce3ce">1.00</text>
+    <text x="960" y="708">Citation recall</text><text x="1300" y="708" text-anchor="end" fill="#74958e">≥ 0.60</text><text x="1400" y="708" text-anchor="end" fill="#8fa5a0">1.00</text><text x="1500" y="708" text-anchor="end" fill="#9ce3ce">1.00</text>
+    <text x="960" y="756">Keyword recall</text><text x="1300" y="756" text-anchor="end" fill="#74958e">≥ 0.65</text><text x="1400" y="756" text-anchor="end" fill="#8fa5a0">0.84</text><text x="1500" y="756" text-anchor="end" fill="#9ce3ce">0.91</text>
   </g>
-  <g class="mono" font-size="19" fill="#b4d1c5">
-    <text x="845" y="394">CITATION RECALL</text>
-    <text x="845" y="498">FAITHFULNESS</text>
-    <text x="845" y="604">P95 LATENCY</text>
-  </g>
-  <path d="M653 431h446M653 537h446M1117 330v311" stroke="#58776f" stroke-width="2"/>
-  <text class="mono" x="1148" y="367" font-size="19" fill="#a7e6cb">OBSERVABILITY / VERIFIED</text>
-  <text class="display" x="1146" y="463" font-size="87" fill="#fcf1da">96</text>
-  <text class="sans" x="1151" y="502" font-size="24" fill="#d8e6d9">hosted Search retrievals</text>
-  <text class="sans" x="1151" y="555" font-size="23" fill="#d8e6d9">HHEM scored all 12 answers.</text>
-  <text class="sans" x="1151" y="589" font-size="23" fill="#d8e6d9">Isolation Forest ran on the</text>
-  <text class="sans" x="1151" y="622" font-size="23" fill="#d8e6d9">hosted agent.</text>
-  <rect x="76" y="690" width="1448" height="85" rx="5" fill="#392f2a" stroke="#c27c60"/>
-  <path d="M77 692h24v81H77z" fill="url(#hatch)"/>
-  <text class="mono" x="122" y="741" font-size="20" fill="#ffbda1">MEMORY / SKIPPED</text>
-  <text class="sans" x="452" y="742" font-size="26" fill="#fff0de">Separate required-memory run: Store HTTP 403 → embedding HTTP 401.</text>
-  <text class="mono" x="76" y="860" font-size="18" fill="#adcebf">AZURE / PART II</text>
-  <text class="mono" x="1524" y="860" font-size="18" fill="#adcebf" text-anchor="end">DISPOSABLE DEPLOYMENT / NOV 2026</text>
+  <text class="sans" x="96" y="800" font-size="18" fill="#74958e">Sample deployment, disposable environments, Nov 2026. HHEM and IsolationForest ran too; Purview protected mode was tested separately.</text>
+
+  <text class="mono" x="70" y="862" font-size="19" fill="#9ce3ce" style="letter-spacing:2px">PASSED  ✓   TORN DOWN  ✓   RESOURCE GROUP GONE  ✓</text>
 </svg>
