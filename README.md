@@ -198,3 +198,7 @@ Run 1 used `MEMORY_OPTIONAL=false`; run 2 used the defaults.
 | Protection mechanism | Purview sensitivity labels via Foundry IQ | Managed Knowledge Base document ACLs (user emails) | Agent Search document ACLs |
 | Who proves the user | The user's delegated token, checked by Azure AI Search | Your backend: API Gateway JWT authorizer (Cognito). Bedrock trusts the email it is given | The user's own Google token, checked by Agent Search |
 | Teardown | `azd down` | `bash scripts/teardown.sh` | `bash scripts/teardown.sh` |
+
+## License
+
+The code is released under the [MIT License](LICENSE). The Metafizik name and logo, and the articles and images under `marketing/`, are copyright Metafiziks and are not covered by that license.
