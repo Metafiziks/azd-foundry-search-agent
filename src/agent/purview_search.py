@@ -173,4 +173,7 @@ class PurviewSearch:
                     "source": name if isinstance(name, str) and name else "Document",
                     "excerpt": text[:6000],
                 })
+        # Proof the search ran: an empty list below means "ran, nothing allowed", never "unreachable"
+        # (failures raise above). Counts only; no query or document content is logged.
+        logger.info("retrieval_outcome=ok references=%d kept=%d", len(references), len(results))
         return results

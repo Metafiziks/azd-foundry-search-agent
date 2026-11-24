@@ -339,6 +339,30 @@ class ProtectedRetrievalTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("sensitive upstream message", response.text)
         model.run.assert_not_awaited()
 
+    async def test_logs_distinguish_empty_result_from_failed_retrieval(self):
+        def respond(references, status=200):
+            def handler(request):
+                if request.method == "GET":
+                    return httpx.Response(200, json=DEFINITIONS[request.url.path])
+                return httpx.Response(status, json={"references": references})
+            return handler
+
+        unlabeled = [{"type": "searchIndex", "sourceData": {"content": "Hidden"}}]
+        async with self.client(httpx.MockTransport(respond(unlabeled))) as http:
+            search = PurviewSearch("https://example.search.windows.net", "protected", self.credential, http)
+            with self.assertLogs("purview_search", "INFO") as logs:
+                self.assertEqual(await search.excerpts("Question", "delegated-token"), [])
+        self.assertIn("retrieval_outcome=ok references=1 kept=0", logs.output[0])
+        self.assertNotIn("Question", logs.output[0])
+
+        server = build_protected_host(SimpleNamespace(run=AsyncMock()), SimpleNamespace(
+            excerpts=AsyncMock(side_effect=ProtectedSearchError("down"))))
+        async with self.client(httpx.ASGITransport(app=server, raise_app_exceptions=False)) as client:
+            with self.assertLogs("purview_host", "WARNING") as logs:
+                await client.post("/responses", json={"input": "Question", "store": False},
+                                  headers={TOKEN_HEADER: "delegated-token"})
+        self.assertIn("retrieval_outcome=failed", logs.output[0])
+
     async def test_wrong_schema_or_search_error_never_falls_back_to_unfiltered_search(self):
         targets = list(DEFINITIONS)[-2:]  # Search source and knowledge base
         source, kb = targets

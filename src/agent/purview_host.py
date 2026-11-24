@@ -73,7 +73,7 @@ def build_protected_host(agent: Agent, search: PurviewSearch) -> ResponsesAgentS
         try:
             documents = await search.excerpts(question, context.client_headers.get(TOKEN_HEADER, ""))
         except (ProtectedSearchError, AzureError):
-            logger.warning("Protected retrieval refused; no documents were sent to the model")
+            logger.warning("retrieval_outcome=failed; no documents were sent to the model")
             raise RuntimeError("Protected document retrieval failed") from None
 
         if not documents:
